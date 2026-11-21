@@ -1,0 +1,6 @@
+{
+  "name": "Pen Fight Royale",
+  "description": "An addictive one-thumb Android pen-flicking arcade game with 2D rigid-body spin physics, collectible pens, 2-player Pass & Play, offline PWA support, and Google AdMob monetization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

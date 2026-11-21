@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: pen-fight-royale-matchmaking
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: ONLINE_ALLOWED_ORIGINS
+        value: https://localhost

@@ -1,0 +1,110 @@
+apply plugin: 'com.android.application'
+
+def releaseAdmobAppId = (project.findProperty('ADMOB_APP_ID') ?: System.getenv('ADMOB_APP_ID') ?: '').trim()
+def releaseSigning = ['ANDROID_KEYSTORE_PATH', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD']
+    .collectEntries { name -> [(name): providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orNull] }
+def hasReleaseSigning = releaseSigning.values().every { it }
+
+android {
+    namespace = "com.penfightroyale.game"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.penfightroyale.game"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile rootProject.file(releaseSigning.ANDROID_KEYSTORE_PATH)
+                storePassword releaseSigning.ANDROID_KEYSTORE_PASSWORD
+                keyAlias releaseSigning.ANDROID_KEY_ALIAS
+                keyPassword releaseSigning.ANDROID_KEY_PASSWORD
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            // Official Google AdMob Test App ID for safe development & QA builds
+            manifestPlaceholders = [
+                admobAppId: "ca-app-pub-3940256099942544~3347511713"
+            ]
+        }
+        release {
+            manifestPlaceholders = [admobAppId: releaseAdmobAppId]
+            if (hasReleaseSigning) signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+// Each variant builds its own public assets. Capacitor sync still supplies the native config.
+android.sourceSets.main.assets.setSrcDirs([])
+def webProject = rootProject.projectDir.parentFile
+['debug', 'release'].each { buildType ->
+    def variantName = buildType.capitalize()
+    def webOutput = layout.buildDirectory.dir("generated/web/${buildType}")
+    def stagedAssets = layout.buildDirectory.dir("generated/capacitorAssets/${buildType}")
+    android.sourceSets.getByName(buildType).assets.srcDir(stagedAssets)
+    def webBuild = tasks.register("build${variantName}Web", Exec) {
+        workingDir webProject
+        environment 'PEN_FIGHT_ANDROID_ADMOB_APP_ID', releaseAdmobAppId
+        commandLine 'node', 'node_modules/vite/bin/vite.js', 'build', '--mode', "android-${buildType}",
+            '--outDir', webOutput.get().asFile.absolutePath, '--emptyOutDir'
+        doFirst {
+            if (buildType == 'release' && !hasReleaseSigning && releaseSigning.values().any { it }) {
+                throw new GradleException('Provide all four ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD signing settings.')
+            }
+        }
+    }
+    def assets = tasks.register("stage${variantName}CapacitorAssets", Sync) {
+        dependsOn webBuild
+        from('src/main/assets') { exclude 'public/**' }
+        from(webOutput) { into 'public' }
+        into stagedAssets
+    }
+    tasks.matching {
+        it.name == "merge${variantName}Assets".toString() ||
+            (it.name.toLowerCase().contains('lint') && it.name.contains(variantName))
+    }.configureEach {
+        dependsOn assets
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

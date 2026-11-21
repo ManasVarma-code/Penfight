@@ -1,0 +1,29 @@
+// The AdMob plugin ships sample IDs in native code even when the app requests live ads.
+// Compile a separate release copy so those IDs and native test switches stay in debug.
+project(':capacitor-community-admob') { admob ->
+    admob.plugins.withId('kotlin-android') {
+        def pluginSources = admob.file('src/main/java')
+        def releaseSources = admob.layout.buildDirectory.dir('generated/admobReleaseSources')
+        def prepareRelease = admob.tasks.register('prepareAdMobReleaseSources', Sync) {
+            from pluginSources
+            into releaseSources
+            filteringCharset = 'UTF-8'
+            filesMatching(['**/*.java', '**/*.kt']) {
+                filter { line ->
+                    line.replaceAll(/ca-app-pub-3940256099942544[\/~]\d+/, '')
+                        .replace('call.getBoolean("isTesting", false)', 'false')
+                        .replace('call.getBoolean("initializeForTesting", false)', 'false')
+                        .replace('call.getData().has("testDeviceIdentifiers")', 'false')
+                }
+            }
+        }
+        admob.android.sourceSets {
+            main.java.setSrcDirs([])
+            debug.java.srcDir(pluginSources)
+            release.java.srcDir(releaseSources)
+        }
+        admob.tasks.matching { it.name in ['compileReleaseKotlin', 'compileReleaseJavaWithJavac'] }.configureEach {
+            dependsOn prepareRelease
+        }
+    }
+}
