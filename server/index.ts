@@ -131,4 +131,4 @@ app.get('/healthz', (_req, res) => res.status(200).json({ status: 'ok' }));
 app.use(express.static('dist'));
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? '127.0.0.1';
-app.listen(port, host, () => console.log(`Pen Fight Royale online server listening on ${host}:${port}`));
+app.listen(port, host, () => console.log(`Pen Fight Aura Wars online server listening on ${host}:${port}`));

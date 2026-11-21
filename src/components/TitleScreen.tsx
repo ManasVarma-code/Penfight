@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
-  Coins,
   Crown,
   Play,
   Sliders,
@@ -41,8 +40,11 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onSelectOpponent,
 }) => {
   const [mode, setMode] = useState<MatchMode>('tournament');
+  const [requiresPrivacyChoices, setRequiresPrivacyChoices] = useState(false);
   const isOnline = useOnlineStatus();
   const adConfig = adService.getConfig();
+
+  useEffect(() => adService.subscribePrivacyOptions(setRequiresPrivacyChoices), []);
 
   const opponent = getOpponentByIndex(profile.selectedOpponentIndex);
   const activePen = getPenById(trialPenId ?? profile.equippedPenId);
@@ -54,10 +56,11 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
       {/* Top Quiet Stats & Audio Bar */}
       <div className="safe-top flex items-center justify-between px-4 pt-3">
         <div className="flex items-center gap-2 text-xs text-slate-300">
-          <Coins className="w-4 h-4 text-yellow-400 shrink-0" />
-          <span className="font-mono-num font-bold text-yellow-300">
-            {profile.coins.toLocaleString()}
-          </span>
+          <Sparkles className="w-4 h-4 text-yellow-400 shrink-0" aria-hidden="true" />
+          <div className="flex flex-col leading-tight text-yellow-300" aria-label={`${profile.coins.toLocaleString()} Aura Points`}>
+            <span className="font-mono-num font-bold">{profile.coins.toLocaleString()}</span>
+            <span className="text-[9px] whitespace-nowrap">Aura Points</span>
+          </div>
           <span className="text-slate-500" aria-hidden="true">·</span>
           <span className="font-mono-num text-slate-300">
             {profile.tournamentWins} Wins
@@ -143,7 +146,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               </button>
               <div className="flex flex-col items-center min-w-0">
                 <span className="text-[11px] font-medium text-slate-400 truncate">
-                  {opponent.rankName} · #{opponent.index + 1}/{TOURNAMENT_LADDER.length}
+                  {opponent.rankName} · Level {opponent.index + 1}/{TOURNAMENT_LADDER.length}
                 </span>
                 <span className="font-display text-sm font-bold text-white truncate">
                   {opponent.isBoss ? `BOSS: ${opponent.name}` : opponent.name}
@@ -200,6 +203,12 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         <p className="mt-4 text-[11px] font-medium text-slate-400">
           Drag &amp; Pull Pen to Flick · Grip Near Tip for Spin · Esc Pause
         </p>
+        {requiresPrivacyChoices && (
+          <button type="button" onClick={() => void adService.openPrivacyOptions()}
+            className="mt-2 text-xs text-slate-300 underline underline-offset-2">
+            Privacy choices
+          </button>
+        )}
       </div>
 
       {/* Policy-Safe Menu Adaptive Banner Slot (Auto-hidden during gameplay!) */}

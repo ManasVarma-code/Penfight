@@ -174,7 +174,7 @@ export default function App() {
     }
   };
 
-  // --- REWARDED AD PLACEMENT 2: Double Match Coins (2x Ledger) ---
+  // --- REWARDED AD PLACEMENT 2: Double Match Aura Points ---
   const handleWatchDoubleCoins = async () => {
     if (adBusy || !hud.ledger || hud.ledger.doubled) return;
     setAdBusy(true);
@@ -184,8 +184,8 @@ export default function App() {
       rewardRequestId: txId,
       placement: 'double_coins',
       contextId: hud.ledger.matchId,
-      label: 'Double Match Coins (2x)',
-      rewardSummary: `+${bonus} extra coins added to balance`,
+      label: 'Double Aura Points',
+      rewardSummary: `+${bonus} Aura Points added to your balance`,
     });
     setAdBusy(false);
 
@@ -194,12 +194,12 @@ export default function App() {
       if (granted) {
         soundSynth.playCoinBurst();
         gameEngine.markLedgerDoubled(bonus);
-        showToast(`+${bonus} bonus coins credited!`);
+        showToast(`+${bonus} bonus Aura Points!`);
       }
     } else if (outcome === 'unearned') {
-      showToast('Watch the full ad to unlock 2x coins.');
+      showToast('Watch the full ad to double your Aura Points.');
     } else {
-      showToast('Ad could not load. Base coins remain saved.');
+      showToast('Ad could not load. Your Aura Points are saved.');
     }
   };
 
@@ -229,7 +229,7 @@ export default function App() {
     }
   };
 
-  // --- REWARDED AD PLACEMENT 4: Lucky Pencil Box (+100 Guaranteed Coins, max 2/day) ---
+  // --- REWARDED AD PLACEMENT 4: Lucky Pencil Box (+100 Aura Points, max 2/day) ---
   const handleWatchCoinChestAd = async () => {
     if (adBusy) return;
     const today = getLocalDayKey();
@@ -246,7 +246,7 @@ export default function App() {
       placement: 'coin_chest',
       contextId: today,
       label: 'Lucky Pencil Box',
-      rewardSummary: '+100 guaranteed coins',
+      rewardSummary: '+100 guaranteed Aura Points',
     });
     setAdBusy(false);
 
@@ -259,10 +259,10 @@ export default function App() {
           d.localChestCount = (d.localChestDay === curDay ? d.localChestCount : 0) + 1;
         });
         soundSynth.playCoinBurst();
-        showToast('+100 coins from Lucky Pencil Box!');
+        showToast('+100 Aura Points from Lucky Pencil Box!');
       }
     } else if (outcome === 'unearned') {
-      showToast('Ad closed early — no coins granted.');
+      showToast('Ad closed early. No Aura Points earned.');
     } else {
       showToast('Ad unavailable right now.');
     }
@@ -345,7 +345,7 @@ export default function App() {
       placement: 'coin_chest',
       contextId: 'qa_console',
       label: 'Publisher QA Rewarded Test',
-      rewardSummary: 'Verifies SDK earned callback (no free coins)',
+      rewardSummary: 'Verifies the reward callback without granting Aura Points',
     });
     setAdBusy(false);
     showToast(`QA Rewarded Result: ${res.toUpperCase()}`);
@@ -369,14 +369,14 @@ export default function App() {
         <canvas
           ref={canvasRef}
           className="block h-full w-full touch-none"
-          aria-label="Pen Fight Royale Physics Arena"
+          aria-label="Pen Fight Aura Wars Physics Arena"
         />
 
         {/* Active Gameplay HUD */}
         {hud.shellState !== 'TITLE_MENU' && (
           <HudOverlay
             hud={hud}
-            coins={profile.coins}
+            auraPoints={profile.coins}
             muted={profile.muted}
             onToggleMute={handleToggleMute}
             onPause={() => hud.mode === 'online' ? setConfirmOnlineLeave(true) : gameEngine.pauseGame()}
@@ -429,11 +429,10 @@ export default function App() {
           />
         )}
 
-        {/* Match Summary & Deterministic Coin Ledger */}
+        {/* Match summary and Aura Points breakdown */}
         {hud.shellState === 'MATCH_OVER' && hud.mode !== 'online' && (
           <MatchOverModal
             hud={hud}
-            profile={profile}
             adBusy={adBusy}
             onWatchDoubleCoins={() => void handleWatchDoubleCoins()}
             onNextOrReplay={(idx) => void handleNextOrReplay(idx)}

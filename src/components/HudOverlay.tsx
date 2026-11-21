@@ -4,7 +4,7 @@ import { HudSnapshot } from '../game/types';
 
 interface HudOverlayProps {
   hud: HudSnapshot;
-  coins: number;
+  auraPoints: number;
   muted: boolean;
   onToggleMute: () => void;
   onPause: () => void;
@@ -12,7 +12,7 @@ interface HudOverlayProps {
 
 export const HudOverlay: React.FC<HudOverlayProps> = ({
   hud,
-  coins,
+  auraPoints,
   muted,
   onToggleMute,
   onPause,
@@ -170,7 +170,7 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
           </span>
           {hud.mode === 'tournament' && (
             <span className="font-mono-num text-yellow-300 font-semibold shrink-0">
-              {coins.toLocaleString()} coins
+              {auraPoints.toLocaleString()} Aura Points
             </span>
           )}
         </div>

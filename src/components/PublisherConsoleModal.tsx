@@ -166,7 +166,7 @@ npx cap open android
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span>2x Match Coins Multiplier</span>
+                    <span>2x Match Aura Points</span>
                     <span className="font-mono-num font-bold text-white">
                       {m.rewardedByPlacement.double_coins}
                     </span>
@@ -420,7 +420,7 @@ npx cap open android
                   <div>
                     <div className="font-bold text-rose-300">Reset Local Save Data</div>
                     <div className="text-[11px] text-slate-400">
-                      Clears local coins, unlocked pens, and tournament progress on this device.
+                      Clears local Aura Points, unlocked pens, and tournament progress on this device.
                     </div>
                   </div>
                   {!confirmReset ? (

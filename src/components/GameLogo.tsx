@@ -7,7 +7,7 @@ export const GameLogo: React.FC = () => {
       <svg
         viewBox="0 0 340 124"
         className="w-[270px] sm:w-[310px] h-auto drop-shadow-[0_12px_24px_rgba(0,0,0,0.65)]"
-        aria-label="Pen Fight Royale"
+        aria-label="Pen Fight Aura Wars"
         role="img"
       >
         <defs>
@@ -68,13 +68,13 @@ export const GameLogo: React.FC = () => {
           fontFamily="Outfit, system-ui, sans-serif"
           fontWeight="800"
           fontSize="24"
-          letterSpacing="5.5"
+          letterSpacing="4.5"
           stroke="#070B14"
           strokeWidth="6"
           paintOrder="stroke"
           fill="url(#logoGold)"
         >
-          ROYALE
+          AURA WARS
         </text>
       </svg>
     </div>

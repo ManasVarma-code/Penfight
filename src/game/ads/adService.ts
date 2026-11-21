@@ -9,6 +9,7 @@ import {
   MaxAdContentRating,
   RewardAdPluginEvents,
   type AdMobRewardItem,
+  type AdmobConsentInfo,
 } from '@capacitor-community/admob';
 import { profileRepo } from '../persistence';
 import { AdLifecycleState, RewardIntent, RewardPlacement } from '../types';
@@ -61,7 +62,7 @@ class AdMobService {
   public bannerVisible = false;
   public qaInstantInterstitial = false; // Dev/QA switch inside Publisher Console
   public consentStatus: AdmobConsentStatus = AdmobConsentStatus.UNKNOWN;
-  public canRequestAds = true;
+  public canRequestAds = !this.isNative();
   public privacyOptionsRequired = false;
   public rewardedPreloaded = false;
   public interstitialPreloaded = false;
@@ -69,7 +70,10 @@ class AdMobService {
   private initPromise: Promise<void> | null = null;
   private initialized = false;
   private bannerCreated = false;
+  private bannerRequested = false;
+  private bannerQueue: Promise<void> = Promise.resolve();
   private bannerListenerAttached = false;
+  private nativeInitialized = false;
   private rewardedPreloadInFlight: Promise<boolean> | null = null;
   private interstitialPreloadInFlight: Promise<boolean> | null = null;
   private lastRewardedFailAt = 0;
@@ -79,6 +83,7 @@ class AdMobService {
   private previewListeners = new Set<(ad: ActivePreviewAd | null) => void>();
   private stateListeners = new Set<(state: AdLifecycleState) => void>();
   private bannerListeners = new Set<(visible: boolean) => void>();
+  private privacyListeners = new Set<(required: boolean) => void>();
 
   getConfig(): AdMobConfig {
     const isNativeAndroid = typeof window !== 'undefined' && Capacitor.isNativePlatform();
@@ -145,6 +150,32 @@ class AdMobService {
     return () => this.bannerListeners.delete(fn);
   }
 
+  subscribePrivacyOptions(fn: (required: boolean) => void): () => void {
+    this.privacyListeners.add(fn);
+    fn(this.privacyOptionsRequired);
+    return () => this.privacyListeners.delete(fn);
+  }
+
+  private applyConsent(info: AdmobConsentInfo): void {
+    this.consentStatus = info.status;
+    this.canRequestAds = info.canRequestAds;
+    const required = info.privacyOptionsRequirementStatus === 'REQUIRED';
+    if (required !== this.privacyOptionsRequired) {
+      this.privacyOptionsRequired = required;
+      for (const fn of this.privacyListeners) fn(required);
+    }
+  }
+
+  private async initializeNativeAds(cfg: AdMobConfig): Promise<void> {
+    if (!this.canRequestAds || this.nativeInitialized) return;
+    await AdMob.initialize({
+      initializeForTesting: cfg.isTestMode,
+      testingDevices: cfg.isTestMode && cfg.testingDevices.length > 0 ? cfg.testingDevices : undefined,
+      maxAdContentRating: MaxAdContentRating.General,
+    });
+    this.nativeInitialized = true;
+  }
+
   private emitPreview(ad: ActivePreviewAd | null): void {
     this.activePreview = ad;
     for (const fn of this.previewListeners) fn(ad);
@@ -181,39 +212,26 @@ class AdMobService {
     }
 
     try {
-      await AdMob.initialize({
-        initializeForTesting: cfg.isTestMode,
-        testingDevices: cfg.isTestMode && cfg.testingDevices.length > 0 ? cfg.testingDevices : undefined,
-        maxAdContentRating: MaxAdContentRating.General,
-      });
-
-      // UMP Privacy Consent (Fix #3): only show form when status === REQUIRED
+      // The consent response must allow ad requests before starting the ads SDK.
       try {
-        let consentInfo = await AdMob.requestConsentInfo({
+        const consentInfo = await AdMob.requestConsentInfo({
           testDeviceIdentifiers:
             cfg.isTestMode && cfg.testingDevices.length > 0
               ? cfg.testingDevices
               : undefined,
         });
-        this.consentStatus = consentInfo.status;
-        this.canRequestAds = consentInfo.canRequestAds;
-        this.privacyOptionsRequired =
-          consentInfo.privacyOptionsRequirementStatus === 'REQUIRED';
+        this.applyConsent(consentInfo);
 
         if (
           consentInfo.isConsentFormAvailable &&
           consentInfo.status === AdmobConsentStatus.REQUIRED
         ) {
-          consentInfo = await AdMob.showConsentForm();
-          this.consentStatus = consentInfo.status;
-          this.canRequestAds = consentInfo.canRequestAds;
-          this.privacyOptionsRequired =
-            consentInfo.privacyOptionsRequirementStatus === 'REQUIRED';
+          this.applyConsent(await AdMob.showConsentForm());
         }
       } catch {
-        // Recoverable: allow gameplay to continue cleanly even if UMP network fails
-        this.canRequestAds = this.isOnline();
+        // Keep any consent confirmed by the SDK. A network error cannot grant it.
       }
+      await this.initializeNativeAds(cfg);
 
       if (!this.bannerListenerAttached) {
         this.bannerListenerAttached = true;
@@ -237,21 +255,25 @@ class AdMobService {
       }
     } catch {
       // Recoverable: gameplay continues normally without ads
+      this.canRequestAds = false;
       this.initialized = false;
     }
   }
 
   async openPrivacyOptions(): Promise<void> {
-    if (!this.isNative()) return;
+    if (!this.isNative() || !this.privacyOptionsRequired) return;
     try {
       await AdMob.showPrivacyOptionsForm();
-      const updated = await AdMob.requestConsentInfo();
-      this.consentStatus = updated.status;
-      this.canRequestAds = updated.canRequestAds;
-      this.privacyOptionsRequired =
-        updated.privacyOptionsRequirementStatus === 'REQUIRED';
+      this.canRequestAds = false;
+      this.rewardedPreloaded = false;
+      this.interstitialPreloaded = false;
+      this.applyConsent(await AdMob.requestConsentInfo());
+      await this.initializeNativeAds(this.getConfig());
     } catch {
-      // Non-fatal
+      // The game remains available if the privacy form or refresh fails.
+      if (!this.nativeInitialized) this.canRequestAds = false;
+    } finally {
+      await this.setMenuBannerVisible(this.bannerRequested);
     }
   }
 
@@ -328,13 +350,15 @@ class AdMobService {
    * plus edge-to-edge bottom margin clearance for Android 15/16 gesture bars.
    */
   async setMenuBannerVisible(visible: boolean): Promise<void> {
-    if ((!this.isOnline() || !this.canRequestAds) && visible) {
-      visible = false;
-    }
-    if (this.bannerVisible === visible) return;
-    this.bannerVisible = visible;
-    for (const fn of this.bannerListeners) fn(visible);
+    this.bannerRequested = visible;
+    this.bannerQueue = this.bannerQueue.then(() => this.syncMenuBanner());
+    await this.bannerQueue;
+  }
 
+  private async syncMenuBanner(): Promise<void> {
+    if (this.bannerRequested && this.isOnline()) await this.initialize();
+    const visible = this.bannerRequested && this.isOnline() && this.canRequestAds;
+    if (this.bannerVisible === visible) return;
     if (!this.isNative()) {
       // Web preview tracks simulated menu banner visibility cleanly
       if (visible) {
@@ -342,14 +366,9 @@ class AdMobService {
           d.adMetrics.bannerImpressions += 1;
         });
       }
-      return;
-    }
-
-    await this.initialize();
-    const cfg = this.getConfig();
-
-    try {
+    } else try {
       if (visible) {
+        const cfg = this.getConfig();
         if (!this.bannerCreated) {
           await AdMob.showBanner({
             adId: cfg.bannerUnitId,
@@ -367,11 +386,18 @@ class AdMobService {
       }
     } catch {
       // Reset bannerCreated if native banner errored so next Menu visit recovers cleanly
-      if (visible) this.bannerCreated = false;
+      if (visible) {
+        this.bannerCreated = false;
+        return;
+      }
     }
+    this.bannerVisible = visible;
+    for (const fn of this.bannerListeners) fn(visible);
   }
 
   async destroyBanner(): Promise<void> {
+    this.bannerRequested = false;
+    await this.bannerQueue;
     this.bannerVisible = false;
     for (const fn of this.bannerListeners) fn(false);
     if (!this.isNative() || !this.bannerCreated) return;

@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   ArrowRight,
-  Coins,
   EyeOff,
   Film,
   Home,
@@ -14,7 +13,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { TOURNAMENT_LADDER } from '../game/content';
-import { HudSnapshot, ProfileV1 } from '../game/types';
+import { HudSnapshot } from '../game/types';
 import { useOnlineStatus } from './PWAComponents';
 
 interface PassHandoffModalProps {
@@ -115,7 +114,6 @@ export const SecondChanceModal: React.FC<SecondChanceModalProps> = ({
 
 interface MatchOverModalProps {
   hud: HudSnapshot;
-  profile: ProfileV1;
   adBusy: boolean;
   onWatchDoubleCoins: () => void;
   onNextOrReplay: (nextOpponentIndex?: number) => void;
@@ -125,7 +123,6 @@ interface MatchOverModalProps {
 
 export const MatchOverModal: React.FC<MatchOverModalProps> = ({
   hud,
-  profile,
   adBusy,
   onWatchDoubleCoins,
   onNextOrReplay,
@@ -183,7 +180,7 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
           )}
         </div>
 
-        {/* Deterministic Pre-Ad Coin Ledger (Blueprint §7.1) */}
+        {/* Match Aura Points ledger */}
         {isTournament && (
           <div className="mt-4 rounded-2xl border border-slate-800 bg-[#0B1120] p-4 space-y-2 text-xs">
             <div className="flex justify-between text-slate-300">
@@ -210,28 +207,28 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
             )}
             <div className="border-t border-slate-800 pt-2 flex items-center justify-between text-sm font-bold">
               <span className="text-slate-200">
-                {ledger.doubled ? 'Total Earned (2x Claimed)' : 'Total Earned'}
+                {ledger.doubled ? 'Aura Points (Doubled)' : 'Aura Points Earned'}
               </span>
               <span className="flex items-center gap-1 font-mono-num text-yellow-300">
-                <Coins className="w-4 h-4 text-yellow-400" />
+                <Sparkles className="w-4 h-4 text-yellow-400" aria-hidden="true" />
                 +{ledger.totalCoins}
               </span>
             </div>
           </div>
         )}
 
-        {/* High-Converting Rewarded Placement: Double Match Coins */}
+        {/* Double match Aura Points once per match */}
         {isTournament && !ledger.doubled && ledger.totalCoins > 0 && (
           <button
             type="button"
             disabled={!isOnline || adBusy}
             onClick={onWatchDoubleCoins}
-            className="mt-3.5 flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-5 py-3.5 font-display text-sm font-extrabold text-slate-950 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-400 active:scale-[0.98] transition whitespace-nowrap"
+            className="mt-3.5 flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-3 py-3.5 font-display text-sm font-extrabold text-slate-950 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-400 active:scale-[0.98] transition"
           >
             <Film className="w-4 h-4" />
             {!isOnline
-              ? 'Offline — 2x Coins Unavailable'
-              : `Watch Ad · Double Coins (+${ledger.totalCoins} Extra)`}
+              ? 'Connect to double Aura Points'
+              : 'Watch Ad · Double Aura Points'}
           </button>
         )}
 
@@ -264,7 +261,7 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
             className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/80 py-2.5 text-xs font-bold text-slate-200 hover:bg-slate-700 transition whitespace-nowrap"
           >
             <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-            Locker ({profile.coins})
+            Pen Locker
           </button>
           <button
             type="button"

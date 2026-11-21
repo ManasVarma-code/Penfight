@@ -167,6 +167,8 @@ export const RANK_NAMES = [
   'Class Monitor Cup',
   'Physics Lab Circuit',
   "Principal's Championship",
+  'Aura Trials',
+  'Aura Wars Finals',
 ] as const;
 
 export const TOURNAMENT_LADDER: OpponentSpec[] = [
@@ -180,10 +182,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'classic_ballpoint',
     deskId: 'school_oak',
-    candidates: 15,
-    angleSpreadDeg: 13,
-    powerSpread: 0.16,
-    edgeBias: 0.7,
   },
   {
     index: 1,
@@ -194,10 +192,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'hyper_gel',
     deskId: 'school_oak',
-    candidates: 16,
-    angleSpreadDeg: 11.5,
-    powerSpread: 0.14,
-    edgeBias: 0.75,
   },
   {
     index: 2,
@@ -208,10 +202,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'neon_highlighter',
     deskId: 'school_oak',
-    candidates: 18,
-    angleSpreadDeg: 10.5,
-    powerSpread: 0.13,
-    edgeBias: 0.8,
   },
   {
     index: 3,
@@ -222,10 +212,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: true,
     penId: 'chunky_marker',
     deskId: 'school_oak',
-    candidates: 20,
-    angleSpreadDeg: 9,
-    powerSpread: 0.11,
-    edgeBias: 0.9,
   },
 
   // Rank 2: Class Monitor Cup (Intermediate)
@@ -238,10 +224,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'hyper_gel',
     deskId: 'school_oak',
-    candidates: 24,
-    angleSpreadDeg: 7.5,
-    powerSpread: 0.095,
-    edgeBias: 0.95,
   },
   {
     index: 5,
@@ -252,10 +234,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'neon_highlighter',
     deskId: 'school_oak',
-    candidates: 25,
-    angleSpreadDeg: 7,
-    powerSpread: 0.09,
-    edgeBias: 1.0,
   },
   {
     index: 6,
@@ -266,10 +244,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'vortex_spinner',
     deskId: 'school_oak',
-    candidates: 26,
-    angleSpreadDeg: 6.5,
-    powerSpread: 0.085,
-    edgeBias: 1.05,
   },
   {
     index: 7,
@@ -280,10 +254,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: true,
     penId: 'hyper_gel',
     deskId: 'school_oak',
-    candidates: 28,
-    angleSpreadDeg: 5.8,
-    powerSpread: 0.08,
-    edgeBias: 1.15,
   },
 
   // Rank 3: Physics Lab Circuit (Expert — Exam Slate Table!)
@@ -296,10 +266,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'chunky_marker',
     deskId: 'exam_slate',
-    candidates: 34,
-    angleSpreadDeg: 4.5,
-    powerSpread: 0.065,
-    edgeBias: 1.2,
   },
   {
     index: 9,
@@ -310,10 +276,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'vortex_spinner',
     deskId: 'exam_slate',
-    candidates: 36,
-    angleSpreadDeg: 4,
-    powerSpread: 0.06,
-    edgeBias: 1.25,
   },
   {
     index: 10,
@@ -324,10 +286,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'gold_fountain',
     deskId: 'exam_slate',
-    candidates: 38,
-    angleSpreadDeg: 3.5,
-    powerSpread: 0.055,
-    edgeBias: 1.3,
   },
   {
     index: 11,
@@ -338,10 +296,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: true,
     penId: 'vortex_spinner',
     deskId: 'exam_slate',
-    candidates: 40,
-    angleSpreadDeg: 3,
-    powerSpread: 0.05,
-    edgeBias: 1.4,
   },
 
   // Rank 4: Principal's Championship (Master / Boss)
@@ -354,10 +308,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'hyper_gel',
     deskId: 'exam_slate',
-    candidates: 40,
-    angleSpreadDeg: 2.6,
-    powerSpread: 0.045,
-    edgeBias: 1.45,
   },
   {
     index: 13,
@@ -368,10 +318,6 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'chunky_marker',
     deskId: 'exam_slate',
-    candidates: 40,
-    angleSpreadDeg: 2.4,
-    powerSpread: 0.042,
-    edgeBias: 1.5,
   },
   {
     index: 14,
@@ -382,29 +328,109 @@ export const TOURNAMENT_LADDER: OpponentSpec[] = [
     isBoss: false,
     penId: 'vortex_spinner',
     deskId: 'exam_slate',
-    candidates: 40,
-    angleSpreadDeg: 2.1,
-    powerSpread: 0.04,
-    edgeBias: 1.55,
   },
   {
     index: 15,
     rankIndex: 3,
     rankName: RANK_NAMES[3],
     name: 'Principal Sharma',
+    title: 'Championship Boss',
+    isBoss: true,
+    penId: 'gold_fountain',
+    deskId: 'exam_slate',
+  },
+  // Rank 5: Aura Trials
+  {
+    index: 16,
+    rankIndex: 4,
+    rankName: RANK_NAMES[4],
+    name: 'Mira',
+    title: 'Edge Stalker',
+    isBoss: false,
+    penId: 'hyper_gel',
+    deskId: 'exam_slate',
+  },
+  {
+    index: 17,
+    rankIndex: 4,
+    rankName: RANK_NAMES[4],
+    name: 'Rudra',
+    title: 'Cross-Desk Striker',
+    isBoss: false,
+    penId: 'neon_highlighter',
+    deskId: 'exam_slate',
+  },
+  {
+    index: 18,
+    rankIndex: 4,
+    rankName: RANK_NAMES[4],
+    name: 'Kavya',
+    title: 'Whip Specialist',
+    isBoss: false,
+    penId: 'vortex_spinner',
+    deskId: 'exam_slate',
+  },
+  {
+    index: 19,
+    rankIndex: 4,
+    rankName: RANK_NAMES[4],
+    name: 'Veer "Sentinel"',
+    title: 'Aura Trials Boss',
+    isBoss: true,
+    penId: 'chunky_marker',
+    deskId: 'exam_slate',
+  },
+  // Rank 6: Aura Wars Finals
+  {
+    index: 20,
+    rankIndex: 5,
+    rankName: RANK_NAMES[5],
+    name: 'Naina',
+    title: 'Counterstrike Ace',
+    isBoss: false,
+    penId: 'classic_ballpoint',
+    deskId: 'exam_slate',
+  },
+  {
+    index: 21,
+    rankIndex: 5,
+    rankName: RANK_NAMES[5],
+    name: 'Aditya',
+    title: 'Precision Whip',
+    isBoss: false,
+    penId: 'hyper_gel',
+    deskId: 'exam_slate',
+  },
+  {
+    index: 22,
+    rankIndex: 5,
+    rankName: RANK_NAMES[5],
+    name: 'Kiara',
+    title: 'Finals Contender',
+    isBoss: false,
+    penId: 'vortex_spinner',
+    deskId: 'exam_slate',
+  },
+  {
+    index: 23,
+    rankIndex: 5,
+    rankName: RANK_NAMES[5],
+    name: 'Ira "Aura Prime"',
     title: 'Grand Champion Boss',
     isBoss: true,
     penId: 'gold_fountain',
     deskId: 'exam_slate',
-    candidates: 40,
-    angleSpreadDeg: 1.8,
-    powerSpread: 0.035,
-    edgeBias: 1.7,
   },
 ];
 
 export function getPenById(id: string): PenSpec {
   return PENS.find((p) => p.id === id) ?? PENS[0];
+}
+
+export function getTournamentRivalPen(id: string): PenSpec {
+  const appearance = getPenById(id);
+  const { mass, power, spin, grip, length, radius } = getPenById('classic_ballpoint');
+  return { ...appearance, mass, power, spin, grip, length, radius };
 }
 
 export function getDeskById(id: string): DeskSpec {

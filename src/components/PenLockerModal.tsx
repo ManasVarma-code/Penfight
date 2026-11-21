@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Coins, Film, Gift, Lock, Sparkles, X } from 'lucide-react';
+import { Check, Film, Gift, Lock, Sparkles, X } from 'lucide-react';
 import { DESKS, PENS } from '../game/content';
 import { getLocalDayKey } from '../game/persistence';
 import { PenSpec, ProfileV1 } from '../game/types';
@@ -71,12 +71,13 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
               Pen Locker
             </h2>
             <p className="text-xs text-slate-400">
-              Unique physics profiles · Guaranteed coin unlocks
+              Unlock pens with Aura Points
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 font-mono-num text-sm font-bold text-yellow-300">
-              <Coins className="w-4 h-4 text-yellow-400" />
+            <div className="flex items-center gap-1.5 font-mono-num text-sm font-bold text-yellow-300"
+              aria-label={`${profile.coins.toLocaleString()} Aura Points`}>
+              <Sparkles className="w-4 h-4 text-yellow-400" aria-hidden="true" />
               {profile.coins.toLocaleString()}
             </div>
             <button
@@ -90,15 +91,15 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
           </div>
         </div>
 
-        {/* Lucky Pencil Box Rewarded Ad Placement (Blueprint §8.1: Guaranteed +100 Coins, max 2/day) */}
+        {/* Lucky Pencil Box: +100 Aura Points, up to twice a day */}
         <div className="border-b border-slate-800 bg-[#162033] px-5 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-yellow-400/15 text-yellow-300 shrink-0">
               <Gift className="w-5 h-5" />
             </div>
             <div className="min-w-0">
-              <div className="text-xs font-bold text-white truncate">
-                Lucky Pencil Box · +100 Coins
+              <div className="text-xs font-bold text-white">
+                Lucky Pencil Box · +100 Aura Points
               </div>
               <div className="text-[11px] text-slate-400">
                 Guaranteed payout · {chestsRemaining}/2 left today
@@ -223,6 +224,7 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
                             onClick={() => onUpgradeMastery(pen.id)}
                             className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/90 px-3 py-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-45 transition whitespace-nowrap"
                             title="Tournament mastery (+1% per level, capped at +5%, disabled in Pass & Play)"
+                            aria-label={mastery >= 5 ? 'Maximum mastery reached' : `Upgrade mastery for ${masteryCost} Aura Points`}
                           >
                             <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
                             {mastery >= 5
@@ -236,9 +238,10 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
                             type="button"
                             disabled={!canAfford}
                             onClick={() => onUnlockPen(pen)}
+                            aria-label={`Unlock ${pen.name} for ${pen.unlockCoins} Aura Points`}
                             className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-yellow-400 py-2.5 text-xs font-extrabold text-slate-950 hover:bg-yellow-300 disabled:bg-slate-800 disabled:text-slate-500 active:scale-[0.98] transition whitespace-nowrap"
                           >
-                            <Coins className="w-3.5 h-3.5" />
+                            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
                             Unlock · {pen.unlockCoins}
                           </button>
 

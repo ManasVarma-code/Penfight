@@ -2,7 +2,7 @@
 <img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
 </div>
 
-# Run and deploy your AI Studio app
+# Pen Fight Aura Wars
 
 This contains everything you need to run your app locally.
 
@@ -28,3 +28,9 @@ For an Android build, set `VITE_ONLINE_SERVER_URL` to the HTTPS origin of the mu
 For public Android matchmaking, the `render.yaml` Blueprint deploys the root `Dockerfile` on Render's Free plan with HTTPS and a `/healthz` health check. Keep a single replica while the queue and matches live in memory. Free services can sleep when idle, and a server restart clears active sessions. Use the resulting HTTPS URL as `VITE_ONLINE_SERVER_URL` before building the Android app.
 
 On a fresh clone, run `npm run build` and `npx cap sync android` after installing dependencies to generate the local Capacitor files before running Gradle.
+
+## Android release
+
+Copy `.env.production.example` to `.env.production` and confirm the three production AdMob units and public matchmaking URL. The Android release build requires an HTTPS origin and an AdMob app ID that matches the native manifest.
+
+To sign the bundle, provide `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` as local Gradle properties or environment variables. Then run `.\gradlew.bat :app:bundleRelease` from the `android` directory. Without signing settings, the build produces an unsigned bundle for inspection. Keep the upload key and its passwords out of the repo.

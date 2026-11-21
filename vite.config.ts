@@ -8,6 +8,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig(({ mode }) => {
   const androidRelease = mode === 'android-release';
   const production = androidRelease ? loadEnv('production', process.cwd(), 'VITE_') : {};
+  const onlineOrigin = production.VITE_ONLINE_SERVER_URL?.trim() ?? '';
   const releaseAdMob = androidRelease ? {
     appId: production.VITE_ADMOB_APP_ID,
     rewardedUnitId: production.VITE_ADMOB_REWARDED_ID,
@@ -29,6 +30,11 @@ export default defineConfig(({ mode }) => {
     if (production.VITE_ADMOB_TEST_MODE !== 'false') {
       throw new Error('Set VITE_ADMOB_TEST_MODE=false in .env.production.');
     }
+    let endpoint: URL | undefined;
+    try { endpoint = new URL(onlineOrigin); } catch { /* Explained below. */ }
+    if (endpoint?.protocol !== 'https:' || endpoint.origin !== onlineOrigin.replace(/\/$/, '')) {
+      throw new Error('Set VITE_ONLINE_SERVER_URL to the public HTTPS server origin in .env.production.');
+    }
   }
 
   let outputDir = 'dist';
@@ -37,7 +43,7 @@ export default defineConfig(({ mode }) => {
       __ANDROID_RELEASE_ADS__: JSON.stringify(androidRelease),
       __ANDROID_ADMOB_CONFIG__: JSON.stringify(releaseAdMob),
       ...(androidRelease && {
-        'import.meta.env.VITE_ONLINE_SERVER_URL': JSON.stringify(production.VITE_ONLINE_SERVER_URL ?? ''),
+        'import.meta.env.VITE_ONLINE_SERVER_URL': JSON.stringify(onlineOrigin),
       }),
     },
     plugins: [
@@ -54,8 +60,8 @@ export default defineConfig(({ mode }) => {
         ],
         manifest: {
           id: '/',
-          name: 'Pen Fight Royale',
-          short_name: 'Pen Fight',
+          name: 'Pen Fight Aura Wars',
+          short_name: 'Aura Wars',
           description:
             'Addictive one-thumb desk pen-flicking arcade game with 2D rigid-body spin physics, Tournament Ladder, and 2-Player Pass & Play.',
           theme_color: '#0B1120',

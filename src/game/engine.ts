@@ -1,5 +1,5 @@
 import { adService } from './ads/adService';
-import { chooseAiFlick } from './ai/aiController';
+import { planAiFlick } from './ai/aiController';
 import { soundSynth } from './audio';
 import {
   DOUBLE_KO_WINDOW_MS,
@@ -8,6 +8,7 @@ import {
   getDeskById,
   getOpponentByIndex,
   getPenById,
+  getTournamentRivalPen,
   HARD_TURN_TIMEOUT_SECONDS,
   MAX_DRAG_WORLD,
   MAX_SUBSTEPS,
@@ -107,7 +108,9 @@ export class PenFightEngine {
   // Turn & KO timers
   private turnSimElapsed = 0;
   private aiThinkTimer = 0;
-  private aiThinkDuration = 0.65;
+  private readonly aiThinkDuration = 0.65;
+  private aiPlan: ReturnType<typeof planAiFlick> | null = null;
+  private aiShot: FlickCommand | null = null;
   private firstRingOutOwner: 'p1' | 'p2' | null = null;
   private firstRingOutAtMs = 0;
   private bothRingOut = false;
@@ -327,6 +330,8 @@ export class PenFightEngine {
   }
 
   startAttractMode(): void {
+    this.aiPlan = null;
+    this.aiShot = null;
     if (this.online) {
       this.online = null;
       this.mode = 'tournament';
@@ -379,7 +384,7 @@ export class PenFightEngine {
           : this.opponent.deskId
       );
       this.p1Pen = getPenById(this.trialPenId ?? profile.equippedPenId);
-      this.p2Pen = getPenById(this.opponent.penId);
+      this.p2Pen = getTournamentRivalPen(this.opponent.penId);
     } else {
       // Pass & Play: fair neutral stats, player's equipped desk
       this.desk = getDeskById(profile.equippedDeskId);
@@ -410,6 +415,8 @@ export class PenFightEngine {
   }
 
   private setupRound(starter: 'p1' | 'p2'): void {
+    this.aiPlan = null;
+    this.aiShot = null;
     const profile = profileRepo.get();
     const p1Mastery =
       this.mode === 'tournament'
@@ -521,13 +528,21 @@ export class PenFightEngine {
   private beginAiThink(): void {
     this.turnPhase = 'AI_THINKING';
     this.aiThinkTimer = 0;
-    this.aiThinkDuration = 0.55 + Math.random() * 0.35;
+    this.aiShot = null;
+    this.aiPlan = planAiFlick(
+      this.physics.snapshot(),
+      this.desk,
+      this.opponent.index,
+      `shot_${this.matchId}_${this.shotCounter + 1}`,
+      this.surgeP2 >= 100 ? TURBO_IMPULSE_MULT : 1,
+      this.getSuddenDeathMult(this.shotsInRound + 1)
+    );
     this.emitHud();
   }
 
-  private getSuddenDeathMult(): number {
-    if (this.shotsInRound < SUDDEN_DEATH_START_SHOT) return 1.0;
-    const steps = Math.min(5, this.shotsInRound - SUDDEN_DEATH_START_SHOT + 1);
+  private getSuddenDeathMult(shots = this.shotsInRound): number {
+    if (shots < SUDDEN_DEATH_START_SHOT) return 1.0;
+    const steps = Math.min(5, shots - SUDDEN_DEATH_START_SHOT + 1);
     return 1 + steps * 0.03; // Caps at +15% (Blueprint §2.1)
   }
 
@@ -890,16 +905,18 @@ export class PenFightEngine {
 
     if (this.turnPhase === 'AI_THINKING') {
       this.aiThinkTimer += dt;
-      if (this.aiThinkTimer >= this.aiThinkDuration) {
-        const snap = this.physics.snapshot();
-        const cmd = chooseAiFlick(
-          snap.p2,
-          snap.p1,
-          this.opponent,
-          this.matchSeed + this.shotCounter * 31 + this.roundNumber * 13,
-          `shot_${this.matchId}_${this.shotCounter + 1}`
-        );
-        this.executeFlick(cmd);
+      const frameBudgetEnd = performance.now() + 3;
+      while (this.aiPlan && performance.now() < frameBudgetEnd) {
+        const next = this.aiPlan.next();
+        if (next.done) {
+          this.aiShot = next.value.shot;
+          this.aiPlan = null;
+        }
+      }
+      if (this.aiShot && this.aiThinkTimer >= this.aiThinkDuration) {
+        const command = this.aiShot;
+        this.aiShot = null;
+        this.executeFlick(command);
       }
       return;
     }
@@ -1034,7 +1051,7 @@ export class PenFightEngine {
       soundSynth.playRingOut(p1WonRound);
       if (p1WonRound && this.shotsInRound === 1) {
         this.oneShotKoEarned = true;
-        this.addCallout('1-SHOT KO!', '+10 BONUS COINS', WORLD_W / 2, WORLD_H * 0.42, '#FACC15');
+        this.addCallout('1-SHOT KO!', '+10 AURA POINTS', WORLD_W / 2, WORLD_H * 0.42, '#FACC15');
       } else {
         this.addCallout(
           'RING OUT!',

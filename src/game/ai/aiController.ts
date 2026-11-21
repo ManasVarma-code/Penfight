@@ -1,125 +1,87 @@
-import { DESK_RECT } from '../content';
-import { mulberry32 } from '../physics/matterAdapter';
-import { FlickCommand, OpponentSpec, PenBodyState } from '../types';
+import { DESK_RECT, DOUBLE_KO_WINDOW_MS, FIXED_DT, REST_HOLD_SECONDS } from '../content';
+import { MatterPhysicsAdapter } from '../physics/matterAdapter';
+import type { DeskSpec, FlickCommand, PenBodyState, PhysicsSnapshot } from '../types';
 
-function distToNearestEdge(x: number, y: number): {
-  dist: number;
-  outX: number;
-  outY: number;
-} {
-  const dLeft = x - DESK_RECT.left;
-  const dRight = DESK_RECT.right - x;
-  const dTop = y - DESK_RECT.top;
-  const dBottom = DESK_RECT.bottom - y;
+// Rivals all use the same ordered list. A ladder win adds one option without
+// taking away any shot the earlier rival could see from the same position.
+const SHOT_OPTIONS = [
+  // [aim along target pen, grip along own pen, power]
+  [0, 0, 0.45], [0, 0, 0.57], [-0.36, 0, 0.53], [0.36, 0, 0.53],
+  [0, 0, 0.69], [-0.58, 0.46, 0.65], [0.58, -0.46, 0.65],
+  [0, 0, 0.81], [-0.7, 0.62, 0.74], [0.7, -0.62, 0.74],
+  [0, 0, 0.93], [-0.3, -0.7, 0.76], [0.3, 0.7, 0.76],
+  [-0.7, 0.7, 0.86], [0.7, -0.7, 0.86], [0, 0, 1],
+  [-0.36, -0.68, 0.92], [0.36, 0.68, 0.92], [-0.78, 0.78, 1],
+  [0.78, -0.78, 1], [-0.53, 0, 0.98], [0.53, 0, 0.98],
+  [0, 0.85, 0.96], [0, -0.85, 0.96], [-0.91, -0.28, 0.95],
+  [0.9, 0.94, 1], [0.55, 0.94, 1],
+] as const;
 
-  const min = Math.min(dLeft, dRight, dTop, dBottom);
-  if (min === dLeft) return { dist: dLeft, outX: -1, outY: 0 };
-  if (min === dRight) return { dist: dRight, outX: 1, outY: 0 };
-  if (min === dTop) return { dist: dTop, outX: 0, outY: -1 };
-  return { dist: dBottom, outX: 0, outY: 1 };
+const PREVIEW_STEPS = Math.ceil(4 / FIXED_DT);
+const DOUBLE_KO_STEPS = Math.ceil(DOUBLE_KO_WINDOW_MS / (1000 * FIXED_DT));
+const CENTER_X = (DESK_RECT.left + DESK_RECT.right) / 2;
+const CENTER_Y = (DESK_RECT.top + DESK_RECT.bottom) / 2;
+
+function pressure(pen: PenBodyState): number {
+  const alongX = Math.abs(pen.x - CENTER_X) / (DESK_RECT.width / 2);
+  const alongY = Math.abs(pen.y - CENTER_Y) / (DESK_RECT.height / 2);
+  return Math.min(1.4, Math.max(alongX, alongY)) + pen.overhangRatio * 0.5;
 }
 
-/**
- * Fair Seeded AI Opponent (Blueprint §6):
- * Evaluates `opponent.candidates` legal FlickCommands and chooses the highest-value
- * ring-out shot while protecting against self-ring-out. Uses identical physics limits.
- */
-export function chooseAiFlick(
-  aiPen: PenBodyState,
-  targetPen: PenBodyState,
-  opponent: OpponentSpec,
-  seed: number,
-  shotId: string
-): FlickCommand {
-  const rng = mulberry32(seed);
-  const edgeInfo = distToNearestEdge(targetPen.x, targetPen.y);
-  const targetCos = Math.cos(targetPen.angle);
-  const targetSin = Math.sin(targetPen.angle);
-
-  let bestScore = -Infinity;
-  let bestGrip = 0;
-  let bestAim = Math.atan2(targetPen.y - aiPen.y, targetPen.x - aiPen.x);
-  let bestPower = 0.72;
-
-  const count = Math.max(12, Math.min(40, opponent.candidates));
-
-  for (let i = 0; i < count; i++) {
-    // Sample target point on player pen: center ram vs outer tips for whip crits
-    const targetOffset =
-      i % 3 === 0 ? 0 : i % 3 === 1 ? 0.65 : -0.65;
-    const tx = targetPen.x + targetCos * (targetOffset * targetPen.spec.length * 0.45);
-    const ty = targetPen.y + targetSin * (targetOffset * targetPen.spec.length * 0.45);
-
-    const dx = tx - aiPen.x;
-    const dy = ty - aiPen.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    const baseAim = Math.atan2(dy, dx);
-
-    // Slight aim sweep around direct vector
-    const aimOffset = ((i / count) - 0.5) * 0.24;
-    const aim = baseAim + aimOffset;
-    const dirX = Math.cos(aim);
-    const dirY = Math.sin(aim);
-
-    // Sample grip offset (center ram or off-center spin whip)
-    const gripOptions = [0, -0.55, 0.55, -0.82, 0.82];
-    const grip = gripOptions[i % gripOptions.length];
-
-    // Power scaled by distance & edge pressure
-    const basePower = Math.min(1, Math.max(0.45, dist / 300 + (i % 4) * 0.1));
-
-    // Score 1: alignment with target
-    const directDot = (dirX * dx + dirY * dy) / dist;
-    let score = directDot * 60;
-
-    // Score 2: does the shot push the player toward their nearest desk edge?
-    const edgePushDot = dirX * edgeInfo.outX + dirY * edgeInfo.outY;
-    const edgeUrgency = Math.max(0.4, 1.8 - edgeInfo.dist / 130);
-    score += edgePushDot * 45 * opponent.edgeBias * edgeUrgency;
-
-    // Score 3: favor tip shots when aiming off-center for extra spin chaos
-    if (Math.abs(targetOffset) > 0.4 && Math.abs(grip) > 0.3) {
-      score += 12 * opponent.edgeBias;
-    }
-
-    // Score 4: penalize self-ring-out if AI is very close to edge in aim direction
-    const projectedEndX = aiPen.x + dirX * (basePower * 220);
-    const projectedEndY = aiPen.y + dirY * (basePower * 220);
-    const margin = 22;
-    const selfOutRisk =
-      projectedEndX < DESK_RECT.left + margin ||
-      projectedEndX > DESK_RECT.right - margin ||
-      projectedEndY < DESK_RECT.top + margin ||
-      projectedEndY > DESK_RECT.bottom - margin;
-
-    if (selfOutRisk && dist > 165) {
-      score -= 36;
-    }
-
-    // Slight preference for decisive hits over timid taps
-    score += basePower * 16;
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestGrip = grip;
-      bestAim = aim;
-      bestPower = basePower;
-    }
+export function* planAiFlick(
+  snapshot: PhysicsSnapshot,
+  desk: DeskSpec,
+  rivalIndex: number,
+  shotId: string,
+  turboMultiplier: number,
+  suddenDeathMultiplier: number
+): Generator<void, { shot: FlickCommand; score: number }> {
+  const preview = new MatterPhysicsAdapter();
+  const { p1: target, p2: rival } = snapshot;
+  const targetDirection = Math.atan2(target.y - rival.y, target.x - rival.x);
+  const options: FlickCommand[] = [{
+    shotId, playerId: 'ai', gripOffset01: 0, normalizedPower: 0.26,
+    aimRadians: Math.atan2(CENTER_Y - rival.y, CENTER_X - rival.x),
+  }];
+  for (const [offset, gripOffset01, normalizedPower] of SHOT_OPTIONS.slice(0, 4 + rivalIndex)) {
+    const offsetDistance = offset * target.spec.length / 2;
+    const x = target.x + Math.cos(target.angle) * offsetDistance;
+    const y = target.y + Math.sin(target.angle) * offsetDistance;
+    const aim = Math.atan2(y - rival.y, x - rival.x);
+    options.push({ shotId, playerId: 'ai', gripOffset01, normalizedPower, aimRadians: aim });
   }
 
-  // Apply difficulty-specific humanlike aim error & power variance
-  const spreadRad = (opponent.angleSpreadDeg * Math.PI) / 180;
-  const noisyAim = bestAim + (rng() * 2 - 1) * spreadRad;
-  const noisyPower = Math.max(
-    0.35,
-    Math.min(1, bestPower + (rng() * 2 - 1) * opponent.powerSpread)
-  );
+  let best = { shot: options[0], score: -Infinity };
+  for (const shot of options) {
+    preview.initializeShotPreview(snapshot, desk);
+    preview.submitFlick(shot, turboMultiplier, suddenDeathMultiplier);
+    let firstRingOut: number | undefined;
+    let impact = 0;
+    for (let i = 0; i < PREVIEW_STEPS; i++) {
+      for (const event of preview.stepFixed()) {
+        if (event.type === 'ring_out') firstRingOut ??= i;
+        else impact = Math.max(impact, event.impulse);
+      }
+      if (firstRingOut === undefined ? preview.getRestDuration() >= REST_HOLD_SECONDS
+        : i - firstRingOut >= DOUBLE_KO_STEPS) break;
+      // The live engine resumes this work across animation frames.
+      if (i % 24 === 23) yield;
+    }
 
-  return {
-    shotId,
-    playerId: 'ai',
-    gripOffset01: bestGrip,
-    aimRadians: noisyAim,
-    normalizedPower: noisyPower,
-  };
+    const { p1, p2 } = preview.snapshot();
+    let score: number;
+    if (p1.outOfBounds && p2.outOfBounds) score = -100;
+    else if (p2.outOfBounds) score = -1000;
+    else if (p1.outOfBounds) score = 1000;
+    else {
+      const targetProgress = pressure(p1) - pressure(target);
+      const safety = pressure(rival) - pressure(p2);
+      const directness = Math.cos(shot.aimRadians - targetDirection);
+      score = targetProgress * 36 + safety * 18 + Math.min(impact, 12) * 1.5
+        + directness * 2;
+    }
+    if (score > best.score) best = { shot, score };
+    yield;
+  }
+  return best;
 }

@@ -63,10 +63,6 @@ export interface OpponentSpec {
   isBoss: boolean;
   penId: string;
   deskId: string;
-  candidates: number;
-  angleSpreadDeg: number;
-  powerSpread: number;
-  edgeBias: number;
 }
 
 export interface FlickCommand {
@@ -188,7 +184,7 @@ export interface ProfileV1 {
   penMastery: Record<string, number>; // 0..5 levels (+1% each, max +5% Tournament only)
   unlockedDeskIds: string[];
   equippedDeskId: string;
-  highestTournamentOpponent: number; // 0..15 unlocked index
+  highestTournamentOpponent: number; // Zero-based index of the furthest unlocked rival
   selectedOpponentIndex: number;
   tournamentWins: number;
   totalKOs: number;

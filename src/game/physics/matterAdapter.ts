@@ -174,6 +174,19 @@ export class MatterPhysicsAdapter {
     Matter.World.add(this.engine.world, [this.pen1.body, this.pen2.body]);
   }
 
+  initializeShotPreview(snapshot: PhysicsSnapshot, desk: DeskSpec): void {
+    Matter.World.clear(this.engine.world, false);
+    Matter.Engine.clear(this.engine);
+    this.engine.timing.lastDelta = FIXED_DT * 1000;
+    this.desk = desk;
+    this.pendingEvents = [];
+    this.restAccumulator = 0;
+    const { p1, p2 } = snapshot;
+    this.pen1 = this.createPenBody(p1.owner, p1.spec, p1.x, p1.y, p1.angle, 1);
+    this.pen2 = this.createPenBody(p2.owner, p2.spec, p2.x, p2.y, p2.angle, 1);
+    Matter.World.add(this.engine.world, [this.pen1.body, this.pen2.body]);
+  }
+
   getPen(owner: PlayerId): ManagedPen {
     return owner === 'p1' ? this.pen1 : this.pen2;
   }

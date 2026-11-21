@@ -21,8 +21,8 @@ function recordFrame(physics: MatterPhysicsAdapter, events: PhysicsEvent[]) {
   return {
     snapshot: {
       ...snapshot,
-      p1: { ...snapshot.p1, trail: snapshot.p1.trail.slice(-6) },
-      p2: { ...snapshot.p2, trail: snapshot.p2.trail.slice(-6) },
+      p1: { ...snapshot.p1, trail: snapshot.p1.trail.slice(-6).map(point => ({ ...point })) },
+      p2: { ...snapshot.p2, trail: snapshot.p2.trail.slice(-6).map(point => ({ ...point })) },
     },
     events,
   };
