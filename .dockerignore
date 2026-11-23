@@ -4,9 +4,5 @@
 !bun.lock
 !tsconfig.json
 !server/
-!server/*.ts
-!src/
-!src/game/
-!src/game/*.ts
-!src/game/physics/
-!src/game/physics/*.ts
+!server/**/
+!server/**/*.ts

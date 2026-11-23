@@ -6,7 +6,6 @@ COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts
 COPY server ./server
-COPY src/game ./src/game
 COPY tsconfig.json ./
 
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3001

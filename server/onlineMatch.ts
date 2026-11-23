@@ -2,13 +2,14 @@ import { randomInt } from 'node:crypto';
 import {
   DOUBLE_KO_WINDOW_MS, DRAW_SHOT_LIMIT, FIXED_DT, HARD_TURN_TIMEOUT_SECONDS,
   REST_HOLD_SECONDS, SUDDEN_DEATH_START_SHOT, TURBO_IMPULSE_MULT, getDeskById, getPenById,
-} from '../src/game/content';
+} from './rankedGame/content';
 import {
   ONLINE_DESK, ONLINE_FRAME_MS, ONLINE_PEN,
   type OnlineFlick, type OnlineMatchState, type OnlineReplay, type OnlineSide,
-} from '../src/game/onlineProtocol';
-import { MatterPhysicsAdapter } from '../src/game/physics/matterAdapter';
-import type { PhysicsEvent } from '../src/game/types';
+} from './rankedGame/onlineProtocol';
+import { MatterPhysicsAdapter } from './rankedGame/physics/matterAdapter';
+import { getTournamentReactionSeconds, planTournamentFlick } from './rankedGame/ai/aiController';
+import type { OpponentSpec, PhysicsEvent } from './rankedGame/types';
 
 const TURN_MS = 30_000;
 const REPLAY_LEAD_MS = 450;
@@ -21,8 +22,8 @@ function recordFrame(physics: MatterPhysicsAdapter, events: PhysicsEvent[]) {
   return {
     snapshot: {
       ...snapshot,
-      p1: { ...snapshot.p1, trail: snapshot.p1.trail.slice(-6) },
-      p2: { ...snapshot.p2, trail: snapshot.p2.trail.slice(-6) },
+      p1: { ...snapshot.p1, trail: snapshot.p1.trail.slice(-6).map(point => ({ ...point })) },
+      p2: { ...snapshot.p2, trail: snapshot.p2.trail.slice(-6).map(point => ({ ...point })) },
     },
     events,
   };
@@ -38,17 +39,28 @@ export function parseFlick(value: unknown): OnlineFlick | null {
 }
 
 export class OnlineMatch {
-  private readonly physics = new MatterPhysicsAdapter();
+  private readonly physics: MatterPhysicsAdapter;
   private readonly seed = randomInt(1, 1_000_000);
   private starter: OnlineSide = 'p1';
   private roundSeedOffset = 0;
+  private extendedRevision?: number;
+  private readonly desk;
+  private readonly playerPen;
+  private readonly rivalPen;
   readonly state: OnlineMatchState;
+  readonly playedSides = new Set<OnlineSide>();
+  startsAt: number;
   replay?: OnlineReplay;
   finishedAt?: number;
 
-  constructor(now: number) {
-    const pen = getPenById(ONLINE_PEN);
-    this.physics.initializeRound(this.seed, pen, pen, 'p2', getDeskById(ONLINE_DESK));
+  constructor(now: number, private readonly rival?: OpponentSpec, equippedPen: string = ONLINE_PEN,
+    preserveHostedGuestPhysics = false) {
+    this.physics = new MatterPhysicsAdapter(preserveHostedGuestPhysics);
+    this.startsAt = now;
+    this.desk = getDeskById(rival?.deskId ?? ONLINE_DESK);
+    this.playerPen = getPenById(rival ? equippedPen : ONLINE_PEN);
+    this.rivalPen = getPenById(rival?.penId ?? ONLINE_PEN);
+    this.physics.initializeRound(this.seed, this.playerPen, this.rivalPen, 'p2', this.desk, !!rival);
     this.state = {
       revision: 0, snapshot: this.physics.snapshot(), score: { p1: 0, p2: 0 },
       surge: { p1: 0, p2: 0 }, turn: 'p1', round: 1, shots: 0, winner: null,
@@ -60,8 +72,8 @@ export class OnlineMatch {
     this.starter = otherSide(this.starter);
     this.state.turn = this.starter;
     this.state.shots = 0;
-    const pen = getPenById(ONLINE_PEN);
-    this.physics.initializeRound(this.seed + ++this.roundSeedOffset, pen, pen, 'p2', getDeskById(ONLINE_DESK));
+    this.physics.initializeRound(this.seed + ++this.roundSeedOffset, this.playerPen, this.rivalPen,
+      'p2', this.desk, !!this.rival);
   }
 
   forfeit(side: OnlineSide, now: number) {
@@ -76,12 +88,42 @@ export class OnlineMatch {
     if (now >= this.state.deadline) this.forfeit(this.state.turn, now);
   }
 
+  startAfterIntro(now: number) {
+    this.startsAt = now + 2500;
+    this.state.deadline = this.startsAt + TURN_MS;
+  }
+
+  allowReconnect(now: number, lastSeen: number) {
+    if (this.state.winner || now < this.state.deadline || now - lastSeen <= 6000
+      || this.extendedRevision === this.state.revision) return;
+    this.state.deadline = Math.max(this.state.deadline, Math.min(now + 12_000, lastSeen + 45_000));
+    this.extendedRevision = this.state.revision;
+  }
+
+  playAi(now: number): void {
+    const state = this.state;
+    if (!this.rival || state.winner || state.turn !== 'p2' || now >= state.deadline) return;
+    const rivalIndex = this.rival.index;
+    const shotId = `${this.seed}_${state.revision + 1}`;
+    const readyAt = (this.replay?.endAt ?? this.startsAt) + getTournamentReactionSeconds(rivalIndex, shotId) * 1000;
+    if (now < readyAt) return;
+    const suddenDeath = 1 + Math.max(0, Math.min(5, state.shots + 1 - SUDDEN_DEATH_START_SHOT + 1)) * 0.03;
+    const plan = planTournamentFlick(
+      { ...state.snapshot, p2: { ...state.snapshot.p2, owner: 'ai' } },
+      this.desk, rivalIndex, shotId, state.surge.p2 >= 100 ? TURBO_IMPULSE_MULT : 1, suddenDeath
+    );
+    let next = plan.next();
+    while (!next.done) next = plan.next();
+    this.play('p2', state.revision, next.value.shot, now);
+  }
+
   play(side: OnlineSide, revision: number, flick: OnlineFlick, now: number): boolean {
     this.expireTurn(now);
     const state = this.state;
-    if (state.winner || side !== state.turn || revision !== state.revision
+    if (now < this.startsAt || state.winner || side !== state.turn || revision !== state.revision
         || (this.replay && now < this.replay.endAt)) return false;
 
+    this.playedSides.add(side);
     const turbo = state.surge[side] >= 100;
     if (turbo) state.surge[side] = 0;
     state.shots++;
