@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import type { Identity } from './competition';
 
 interface Challenge {
@@ -8,11 +8,13 @@ interface Challenge {
   name: string;
   state: string;
   verifier: string;
+  returnToApp: boolean;
   started: boolean;
   consumed: boolean;
   failed?: boolean;
   redeeming?: boolean;
   identity?: Identity;
+  token?: string;
 }
 
 const secret = () => randomBytes(32).toString('base64url');
@@ -23,6 +25,30 @@ export type RankedAuthConfig = { redirectUri: string } & (
   { provider: 'supabase'; projectUrl: string; publishableKey: string }
 );
 const supabaseCookie = 'pf_supabase_state';
+
+function signInPage(res: Response, status: number, returnToApp = false) {
+  const title = status === 200 ? 'You’re signed in' : 'Sign-in didn’t finish';
+  const message = status === 200 ? 'Return to Pen Fight Aura Wars to play Ranked.'
+    : 'Return to Pen Fight Aura Wars and try signing in again.';
+  const button = returnToApp
+    ? '<a href="intent://ranked-auth/complete#Intent;scheme=penfightaurawars;package=com.penfightroyale.game;end">Return to game</a>'
+    : '<p class="hint">You can close this tab.</p>';
+  res.status(status).set({
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+    'Referrer-Policy': 'no-referrer',
+  }).type('html').send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title} · Pen Fight Aura Wars</title><style>
+:root { color-scheme: dark; font: 16px system-ui, sans-serif; background: #0a1220; color: #e7f3ff; }
+body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+main { max-width: 400px; text-align: center; padding: 32px 24px; background: #111f32; border: 1px solid #27516a; border-radius: 24px; }
+.brand { color: #9fe7f7; font-weight: 700; }
+h1 { margin: 12px 0; font-size: 1.75rem; } p { line-height: 1.5; }
+a { display: block; padding: 14px; margin-top: 24px; border-radius: 12px; background: #79e4f5; color: #101c2d; font-weight: 750; }
+.hint { color: #bdcddd; }
+</style></head><body><main><div class="brand">Pen Fight Aura Wars</div><h1>${title}</h1><p>${message}</p>${button}</main></body></html>`);
+}
 
 interface RankedAccountStore {
   createAccountSession(identity: Identity, now: number): string | Promise<string>;
@@ -51,7 +77,7 @@ export function createRankedAuth(store: RankedAccountStore, config: RankedAuthCo
     const launch = secret();
     challenges.set(key, {
       launch, deadline: Date.now() + lifetime, name, state: secret(), verifier: secret(),
-      started: false, consumed: false,
+      started: false, consumed: false, returnToApp: req.body?.returnToApp === true,
     });
     res.status(201).json({ check: key, url: new URL(`/api/online/auth/google/start/${launch}`, redirect).href });
   });
@@ -59,7 +85,7 @@ export function createRankedAuth(store: RankedAccountStore, config: RankedAuthCo
   router.get('/auth/google/start/:launch', (req, res) => {
     const attempt = validSecret.test(req.params.launch)
       ? active([...challenges.values()].find(item => item.launch === req.params.launch)) : undefined;
-    if (!attempt || attempt.started) { res.status(410).send('Open a new sign-in request in Pen Fight Aura Wars.'); return; }
+    if (!attempt || attempt.started) { signInPage(res, 410, attempt?.returnToApp); return; }
     attempt.started = true;
     const origin = project ? new URL('/auth/v1/authorize', project) : new URL('https://accounts.google.com/o/oauth2/v2/auth');
     const challenge = createHash('sha256').update(attempt.verifier).digest('base64url');
@@ -86,7 +112,7 @@ export function createRankedAuth(store: RankedAccountStore, config: RankedAuthCo
     const cookieName = project ? supabaseCookie : `pf_signin_${state.slice(0, 12)}`;
     const attempt = validSecret.test(state) && cookies.includes(`${cookieName}=${state}`)
       ? active([...challenges.values()].find(item => item.state === state)) : undefined;
-    if (!attempt || attempt.consumed) { res.status(410).send('This sign-in request has expired. Return to the game.'); return; }
+    if (!attempt || attempt.consumed) { signInPage(res, 410, attempt?.returnToApp); return; }
     attempt.consumed = true;
     res.clearCookie(cookieName, { path: redirect.pathname });
     try {
@@ -121,21 +147,26 @@ export function createRankedAuth(store: RankedAccountStore, config: RankedAuthCo
       }
       if (typeof sub !== 'string' || !/^[\w.-]{1,128}$/.test(sub)) throw new Error('Invalid subject');
       attempt.identity = { id: `google:${sub}`, displayName: attempt.name };
-      res.send('Signed in. Return to Pen Fight Aura Wars to play Ranked.');
+      signInPage(res, 200, attempt.returnToApp);
     } catch {
       attempt.failed = true;
-      res.status(400).send('Sign-in could not be completed. Return to the game to try again.');
+      signInPage(res, 400, attempt.returnToApp);
     }
   });
 
   router.post('/auth/google/check', async (req, res, next) => {
     const attempt = typeof req.body?.check === 'string' ? active(challenges.get(req.body.check)) : undefined;
     if (!attempt || attempt.failed) { res.sendStatus(410); return; }
+    if (attempt.token) { res.json({ token: attempt.token }); return; }
     if (!attempt.identity || attempt.redeeming) { res.sendStatus(202); return; }
     attempt.redeeming = true;
     try {
       const token = await store.createAccountSession(attempt.identity, Date.now());
-      challenges.delete(req.body.check);
+      // Android may lose the response when the browser backgrounds its WebView.
+      // Let the same private check key recover the same session until it expires.
+      if (attempt.returnToApp) attempt.token = token;
+      else challenges.delete(req.body.check);
+      attempt.redeeming = false;
       res.json({ token });
     } catch (error) {
       attempt.redeeming = false;
