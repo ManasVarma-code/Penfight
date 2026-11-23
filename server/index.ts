@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import express from 'express';
 import type { ErrorRequestHandler, Request, RequestHandler, Response } from 'express';
 import { OnlineMatch, otherSide, parseFlick } from './onlineMatch';
@@ -122,12 +122,14 @@ function collectExpired(now: number) {
 }
 setInterval(() => collectExpired(Date.now()), 1_000).unref();
 
+const smallOnlineBody = express.json({ limit: '1kb' });
+const offlineBackupBody = express.json({ limit: '48kb' });
 app.use('/api/online', (req, res, next) => {
   const origin = req.get('Origin');
   if (origin && allowedOrigins.has(origin)) {
     res.set('Access-Control-Allow-Origin', origin).vary('Origin');
     res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-    res.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   }
   res.set('Cache-Control', 'no-store');
   if (req.method === 'OPTIONS') {
@@ -135,10 +137,33 @@ app.use('/api/online', (req, res, next) => {
     return;
   }
   next();
-}, express.json({ limit: '1kb' }));
+}, (req, res, next) => {
+  const parser = req.method === 'PUT' && req.path === '/competition/offline-backup' ? offlineBackupBody : smallOnlineBody;
+  parser(req, res, next);
+});
 
 const route = (handler: (req: Request, res: Response) => Promise<void>): RequestHandler =>
   (req, res, next) => { void handler(req, res).catch(next); };
+
+app.get('/api/online/competition/offline-backup', route(async (req, res) => {
+  const identity = await competition?.verifyIdentity(req.get('Authorization'));
+  if (!competition || !identity) { res.sendStatus(competition ? 401 : 503); return; }
+  const slot = createHash('sha256').update(identity.id).digest('hex');
+  res.json({ slot, backup: await competition.store.getOfflineBackup(identity.id) });
+}));
+
+app.put('/api/online/competition/offline-backup', route(async (req, res) => {
+  const identity = await competition?.verifyIdentity(req.get('Authorization'));
+  if (!competition || !identity) { res.sendStatus(competition ? 401 : 503); return; }
+  const { version, progress } = req.body ?? {};
+  if (!Number.isInteger(version) || version < 0 || version >= 2147483647 ||
+      !progress || progress.schemaVersion !== 1 || !Number.isSafeInteger(progress.coins) || progress.coins < 0) {
+    res.sendStatus(400);
+    return;
+  }
+  if (!await competition.store.putOfflineBackup(identity.id, version, progress)) { res.sendStatus(409); return; }
+  res.json({ version: version + 1 });
+}));
 
 app.get('/api/online/competition/availability', route(async (_req, res) => {
   const ranked = !!competition && await competition.ready().then(() => true, () => false);

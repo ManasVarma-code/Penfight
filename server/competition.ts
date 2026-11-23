@@ -5,6 +5,7 @@ import { calculateTournamentReward, getTournamentAchievements } from './rankedGa
 import { getAuraRank, STARTING_RATING, type RankedHistoryEntry } from './rankedGame/ranking';
 
 export type Leaderboard = 'ranked' | 'tournament' | 'wealth';
+export interface OfflineBackup { version: number; progress: Record<string, unknown> }
 export interface Identity { id: string; displayName: string }
 export interface CompetitiveProfile extends Identity {
   rating: number;
@@ -150,6 +151,9 @@ export class CompetitionStore {
         id TEXT PRIMARY KEY, mode TEXT NOT NULL, a TEXT NOT NULL, b TEXT NOT NULL, finished INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS settled_pair ON settled(mode, a, b, finished);
+      CREATE TABLE IF NOT EXISTS offline_backups (
+        account_id TEXT PRIMARY KEY, version INTEGER NOT NULL, progress TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS ranked_history (
         match_id TEXT NOT NULL, account_id TEXT NOT NULL, finished INTEGER NOT NULL, data TEXT NOT NULL,
         PRIMARY KEY (match_id, account_id)
@@ -162,6 +166,19 @@ export class CompetitionStore {
   }
 
   close() { this.db.close(); }
+
+  getOfflineBackup(accountId: string): OfflineBackup | null {
+    const row = this.db.prepare('SELECT version, progress FROM offline_backups WHERE account_id = ?').get(accountId);
+    return row ? { version: Number(row.version), progress: JSON.parse(String(row.progress)) } : null;
+  }
+
+  putOfflineBackup(accountId: string, version: number, progress: OfflineBackup['progress']): boolean {
+    const contents = JSON.stringify(progress);
+    return version === 0
+      ? !!this.db.prepare('INSERT INTO offline_backups VALUES (?, 1, ?) ON CONFLICT DO NOTHING').run(accountId, contents).changes
+      : !!this.db.prepare('UPDATE offline_backups SET version = version + 1, progress = ? WHERE account_id = ? AND version = ?')
+        .run(contents, accountId, version).changes;
+  }
 
   get(id: string): CompetitiveProfile | undefined {
     const row = this.db.prepare('SELECT data FROM competitors WHERE id = ?').get(id);

@@ -17,5 +17,8 @@ CREATE TABLE IF NOT EXISTS pen_fight_ranked.account_sessions (
   token_hash text PRIMARY KEY, account_id text NOT NULL, expires bigint NOT NULL
 );
 CREATE INDEX IF NOT EXISTS account_sessions_expiry ON pen_fight_ranked.account_sessions(expires);
+CREATE TABLE IF NOT EXISTS pen_fight_ranked.offline_backups (
+  account_id text PRIMARY KEY, version integer NOT NULL, progress jsonb NOT NULL
+);
 REVOKE ALL ON ALL TABLES IN SCHEMA pen_fight_ranked FROM PUBLIC;
 COMMIT;

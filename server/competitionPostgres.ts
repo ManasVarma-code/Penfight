@@ -3,7 +3,7 @@ import { Pool, type PoolClient } from 'pg';
 import type { RankedHistoryEntry } from './rankedGame/ranking';
 import {
   applyPurchase, applyRankedResult, applyTournamentResult, newCompetitor, publicRank, rivalAvailable,
-  type CompetitiveProfile, type Identity, type Leaderboard,
+  type CompetitiveProfile, type Identity, type Leaderboard, type OfflineBackup,
 } from './competition';
 
 const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
@@ -30,6 +30,20 @@ export class PostgresCompetitionStore {
   }
 
   async close() { await this.pool.end(); }
+
+  async getOfflineBackup(accountId: string): Promise<OfflineBackup | null> {
+    const { rows } = await this.pool.query<OfflineBackup>(
+      `SELECT version, progress FROM ${schema}.offline_backups WHERE account_id = $1`, [accountId]);
+    return rows[0] ?? null;
+  }
+
+  async putOfflineBackup(accountId: string, version: number, progress: OfflineBackup['progress']) {
+    const result = version === 0
+      ? await this.pool.query(`INSERT INTO ${schema}.offline_backups VALUES ($1, 1, $2) ON CONFLICT DO NOTHING`, [accountId, progress])
+      : await this.pool.query(`UPDATE ${schema}.offline_backups SET version = version + 1, progress = $3
+        WHERE account_id = $1 AND version = $2`, [accountId, version, progress]);
+    return !!result.rowCount;
+  }
 
   private async transaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
