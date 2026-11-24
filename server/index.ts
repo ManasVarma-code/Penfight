@@ -6,14 +6,13 @@ import { getRank } from './competition';
 import { loadCompetition } from './competitionConfig';
 import { ONLINE_PEN, type OnlineSide, type OnlineStatus } from './rankedGame/onlineProtocol';
 import { getOpponentByIndex, PENS } from './rankedGame/content';
-import { getAuraRank, rankedSearchRange } from './rankedGame/ranking';
+import { getAuraRank } from './rankedGame/ranking';
 import { createRankedAuth } from './rankedAuth';
 
 const app = express();
 app.disable('x-powered-by');
 const SESSION_IDLE_MS = 45_000;
 const RESULT_RETENTION_MS = 90_000;
-const PRACTICE_WAIT_MS = 12_000;
 const MAX_SESSIONS = 200;
 const competition = loadCompetition();
 const allowedOrigins = new Set(
@@ -27,7 +26,7 @@ interface Session {
   side?: OnlineSide;
   match?: OnlineMatch;
   accountId?: string;
-  ranked?: { queuedAt: number; rating: number; displayName: string; penId: string };
+  ranked?: { rating: number; displayName: string; penId: string };
 }
 const sessions = new Map<string, Session>();
 const queue = new Set<Session>();
@@ -54,8 +53,7 @@ async function pairRanked(now: number) {
       if (first === second) continue;
       const candidate = second.ranked!;
       const gap = Math.abs(search.rating - candidate.rating);
-      const range = Math.min(rankedSearchRange(now - search.queuedAt), rankedSearchRange(now - candidate.queuedAt));
-      if (gap > range || gap >= bestGap || !await competition.store.rankPairEligible(first.accountId!, second.accountId!, now)) continue;
+      if (gap >= bestGap || !await competition.store.rankPairEligible(first.accountId!, second.accountId!, now)) continue;
       best = second;
       bestGap = gap;
     }
@@ -63,7 +61,7 @@ async function pairRanked(now: number) {
   }
 
   // Once rated pairings are exhausted, let remaining players duel without rating changes.
-  const waiting = [...rankedQueue].filter(player => now - player.ranked!.queuedAt >= PRACTICE_WAIT_MS);
+  const waiting = [...rankedQueue];
   for (const first of waiting) {
     if (!rankedQueue.has(first)) continue;
     let best: Session | undefined;
@@ -265,7 +263,7 @@ app.post('/api/online/join', route(async (req, res) => {
   }
   sessions.set(token, player);
   if (mode === 'ranked' && profile) {
-    player.ranked = { queuedAt: now, rating: profile.rating, displayName: profile.displayName, penId: penId ?? ONLINE_PEN };
+    player.ranked = { rating: profile.rating, displayName: profile.displayName, penId: penId ?? ONLINE_PEN };
     rankedQueue.add(player);
     matchRanked(now)?.catch(reportStoreFailure);
     res.status(201).json({ token });
