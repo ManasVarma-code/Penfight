@@ -207,6 +207,14 @@ app.post('/api/online/join', route(async (req, res) => {
       .map(session => recordResult(session.match!, now)));
   }
   const profile = identity && await competition!.store.open(identity);
+  if (mode === 'ranked' && identity && profile && penId && penId !== ONLINE_PEN && !profile.ownedPens.includes(penId)) {
+    const backup = await competition!.store.getOfflineBackup(identity.id);
+    const unlocked = backup?.progress.unlockedPens;
+    if (!Array.isArray(unlocked) || !unlocked.includes(penId)) {
+      res.sendStatus(403);
+      return;
+    }
+  }
   const token = randomUUID();
   const player: Session = { token, seen: now, accountId: identity?.id };
   const rival = req.body?.rival;
