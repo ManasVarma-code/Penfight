@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AdMobOverlay } from './components/AdMobOverlay';
+import { WebAdSenseBanner } from './components/WebAdSenseBanner';
 import { HudOverlay } from './components/HudOverlay';
 import { GameSettings } from './components/GameSettings';
 import { OpeningScreen } from './components/OpeningScreen';
@@ -19,6 +20,7 @@ import { TitleScreen } from './components/TitleScreen';
 import { WeeklyTournament } from './components/WeeklyTournament';
 import { ActivePreviewAd, adService } from './game/ads/adService';
 import { AD_QA_ENABLED } from './game/ads/adQa';
+import { getWebAdSenseConfig } from './game/ads/webAds';
 import { soundSynth } from './game/audio';
 import { getDeskById, getOpponentByIndex, getPenById } from './game/content';
 import { gameEngine } from './game/engine';
@@ -31,6 +33,7 @@ import type { RankedHistoryEntry } from './game/ranking';
 import { HudSnapshot, MatchMode, PenSpec, PenUpgradePart, ProfileV1 } from './game/types';
 
 export default function App() {
+  const webAds = useMemo(() => getWebAdSenseConfig(), []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [profile, setProfile] = useState<ProfileV1>(() => profileRepo.get());
   const [hud, setHud] = useState<HudSnapshot>(() => ({
@@ -469,6 +472,16 @@ export default function App() {
     <main className="relative flex h-[100dvh] w-full items-center justify-center bg-[#060911] overflow-hidden">
       <OfflineIndicator />
 
+      {/* Desktop Left Ad Unit (Web-Only, Outside Gameplay Arena) */}
+      {webAds.enabled && webAds.slotDesktopLeft && (
+        <aside
+          className="hidden xl:flex flex-col items-center justify-center absolute left-4 2xl:left-12 top-1/2 -translate-y-1/2 z-10 w-[160px] 2xl:w-[300px]"
+          aria-label="Desktop Advertisement Left"
+        >
+          <WebAdSenseBanner slotId={webAds.slotDesktopLeft} format="vertical" className="w-full" />
+        </aside>
+      )}
+
       {/* Centered Portrait Arcade Viewport (Full-bleed on Mobile, Sleek Portrait Frame on Desktop) */}
       <div className="relative h-full w-full max-w-[460px] sm:my-2 sm:h-[min(100dvh-16px,860px)] sm:rounded-[28px] sm:border sm:border-slate-800/90 sm:shadow-[0_24px_80px_rgba(0,0,0,0.85)] overflow-hidden bg-[#070B14]">
         {/* Isolated 60fps Canvas Container */}
@@ -643,6 +656,16 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Desktop Right Ad Unit (Web-Only, Outside Gameplay Arena) */}
+      {webAds.enabled && webAds.slotDesktopRight && (
+        <aside
+          className="hidden xl:flex flex-col items-center justify-center absolute right-4 2xl:right-12 top-1/2 -translate-y-1/2 z-10 w-[160px] 2xl:w-[300px]"
+          aria-label="Desktop Advertisement Right"
+        >
+          <WebAdSenseBanner slotId={webAds.slotDesktopRight} format="vertical" className="w-full" />
+        </aside>
+      )}
 
       {weeklyOpen && <WeeklyTournament profile={profile} onClose={() => setWeeklyOpen(false)}
         onPlay={() => { if (gameEngine.startWeeklyMatch()) setWeeklyOpen(false); }} />}
