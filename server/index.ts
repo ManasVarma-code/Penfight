@@ -4,8 +4,8 @@ import type { ErrorRequestHandler, Request, RequestHandler, Response } from 'exp
 import { OnlineMatch, otherSide, parseFlick } from './onlineMatch';
 import { getRank } from './competition';
 import { loadCompetition } from './competitionConfig';
-import type { OnlineSide, OnlineStatus } from './rankedGame/onlineProtocol';
-import { getOpponentByIndex } from './rankedGame/content';
+import { ONLINE_PEN, type OnlineSide, type OnlineStatus } from './rankedGame/onlineProtocol';
+import { getOpponentByIndex, PENS } from './rankedGame/content';
 import { getAuraRank, rankedSearchRange } from './rankedGame/ranking';
 import { createRankedAuth } from './rankedAuth';
 
@@ -26,7 +26,7 @@ interface Session {
   side?: OnlineSide;
   match?: OnlineMatch;
   accountId?: string;
-  ranked?: { queuedAt: number; rating: number; displayName: string };
+  ranked?: { queuedAt: number; rating: number; displayName: string; penId: string };
 }
 const sessions = new Map<string, Session>();
 const queue = new Set<Session>();
@@ -62,7 +62,7 @@ async function pairRanked(now: number) {
     rankedQueue.delete(first);
     rankedQueue.delete(best);
     const match = new OnlineMatch(now);
-    match.startAfterIntro(now);
+    match.startAfterIntro(Date.now());
     first.side = 'p1';
     best.side = 'p2';
     first.match = best.match = match;
@@ -188,6 +188,11 @@ app.post('/api/online/join', route(async (req, res) => {
     res.sendStatus(400);
     return;
   }
+  const penId = req.body?.penId;
+  if (mode === 'ranked' && penId !== undefined && !PENS.some(pen => pen.id === penId)) {
+    res.sendStatus(400);
+    return;
+  }
   const identity = mode === 'guest' ? null : await competition?.verifyIdentity(req.get('Authorization'));
   if (mode !== 'guest' && (!competition || !identity)) {
     res.sendStatus(competition ? 401 : 503);
@@ -229,7 +234,7 @@ app.post('/api/online/join', route(async (req, res) => {
   }
   sessions.set(token, player);
   if (mode === 'ranked' && profile) {
-    player.ranked = { queuedAt: now, rating: profile.rating, displayName: profile.displayName };
+    player.ranked = { queuedAt: now, rating: profile.rating, displayName: profile.displayName, penId: penId ?? ONLINE_PEN };
     rankedQueue.add(player);
     matchRanked(now)?.catch(reportStoreFailure);
     res.status(201).json({ token });
@@ -253,6 +258,30 @@ function getSession(authorization: string | undefined) {
   return token && sessions.get(token) || undefined;
 }
 
+async function sendMatchState(session: Session, match: OnlineMatch, side: OnlineSide, req: Request, res: Response) {
+  const now = Date.now();
+  const { state, replay } = match;
+  const includeReplay = replay && req.query.revision !== String(state.revision)
+    && (req.query.presentation === '1' || replay.endAt > now);
+  const meta = authenticatedMatches.get(match);
+  const players = rankedPlayers.get(match);
+  // Deliver the final shot before waiting for the rating receipt from storage.
+  const resultReady = state.winner && !includeReplay;
+  if (resultReady) await recordResult(match, now);
+  const ranked = meta && players && session.accountId ? {
+    id: meta.id,
+    startsAt: match.startsAt,
+    players: {
+      p1: { displayName: players.p1.displayName, rating: players.p1.rating, penId: players.p1.penId },
+      p2: { displayName: players.p2.displayName, rating: players.p2.rating, penId: players.p2.penId },
+    },
+    result: resultReady ? await competition?.store.rankedResult(meta.id, session.accountId) : undefined,
+  } : undefined;
+  res.json({
+    status: 'matched', side, now, state, ranked, replay: includeReplay ? replay : undefined,
+  } satisfies OnlineStatus);
+}
+
 app.get('/api/online/state', route(async (req, res) => {
   const now = Date.now();
   collectExpired(now);
@@ -266,24 +295,7 @@ app.get('/api/online/state', route(async (req, res) => {
     res.json({ status: 'waiting' } satisfies OnlineStatus);
     return;
   }
-  const { state, replay } = session.match;
-  if (state.winner) await recordResult(session.match, now);
-  const meta = authenticatedMatches.get(session.match);
-  const players = rankedPlayers.get(session.match);
-  const ranked = meta && players && session.accountId ? {
-    id: meta.id,
-    startsAt: session.match.startsAt,
-    players: {
-      p1: { displayName: players.p1.displayName, rating: players.p1.rating },
-      p2: { displayName: players.p2.displayName, rating: players.p2.rating },
-    },
-    result: state.winner ? await competition?.store.rankedResult(meta.id, session.accountId) : undefined,
-  } : undefined;
-  res.json({
-    status: 'matched', side: session.side, now, state, ranked,
-    replay: replay && replay.endAt > now && req.query.revision !== String(state.revision)
-      ? replay : undefined,
-  } satisfies OnlineStatus);
+  await sendMatchState(session, session.match, session.side, req, res);
 }));
 
 app.post('/api/online/flick', route(async (req, res) => {
@@ -303,6 +315,10 @@ app.post('/api/online/flick', route(async (req, res) => {
   }
   const accepted = session.match.play(session.side, revision, flick, now);
   if (accepted) recordResult(session.match, Date.now())?.catch(reportStoreFailure);
+  if (accepted && session.ranked && req.query.presentation === '1') {
+    await sendMatchState(session, session.match, session.side, req, res);
+    return;
+  }
   res.sendStatus(accepted ? 204 : 409);
 }));
 

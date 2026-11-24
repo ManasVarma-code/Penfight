@@ -44,6 +44,7 @@ export class OnlineMatch {
   private starter: OnlineSide = 'p1';
   private roundSeedOffset = 0;
   private extendedRevision?: number;
+  private ranked = false;
   private readonly desk;
   private readonly playerPen;
   private readonly rivalPen;
@@ -89,6 +90,7 @@ export class OnlineMatch {
   }
 
   startAfterIntro(now: number) {
+    this.ranked = true;
     this.startsAt = now + 2500;
     this.state.deadline = this.startsAt + TURN_MS;
   }
@@ -195,7 +197,7 @@ export class OnlineMatch {
       state.turn = otherSide(side);
     }
 
-    const startAt = Date.now() + REPLAY_LEAD_MS;
+    const startAt = Date.now() + (this.ranked ? 75 : REPLAY_LEAD_MS);
     const endAt = startAt + frames.length * ONLINE_FRAME_MS;
     this.replay = { frames, startAt, endAt, power: flick.normalizedPower, turbo };
     state.deadline = endAt + TURN_MS;
