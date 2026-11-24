@@ -6,7 +6,7 @@ import { getAuraRank, STARTING_RATING, type RankedHistoryEntry } from './rankedG
 
 export type Leaderboard = 'ranked' | 'tournament' | 'wealth';
 export interface OfflineBackup { version: number; progress: Record<string, unknown> }
-export interface Identity { id: string; displayName: string }
+export interface Identity { id: string; displayName: string; fullName?: string; username?: string }
 export interface CompetitiveProfile extends Identity {
   rating: number;
   peakRating: number;
@@ -196,7 +196,10 @@ export class CompetitionStore {
   open(identity: Identity): CompetitiveProfile {
     const existing = this.get(identity.id);
     if (existing) {
-      if (existing.displayName !== identity.displayName) {
+      if (identity.username && !existing.username) {
+        Object.assign(existing, identity);
+        this.put(existing);
+      } else if (!existing.username && existing.displayName !== identity.displayName) {
         existing.displayName = identity.displayName;
         this.put(existing);
       }

@@ -6,12 +6,15 @@ interface Challenge {
   launch: string;
   deadline: number;
   name: string;
+  mode: 'signin' | 'signup' | 'legacy';
+  fullName?: string;
   state: string;
   verifier: string;
   returnToApp: boolean;
   started: boolean;
   consumed: boolean;
   failed?: boolean;
+  accountMissing?: boolean;
   redeeming?: boolean;
   identity?: Identity;
   token?: string;
@@ -28,8 +31,9 @@ const supabaseCookie = 'pf_supabase_state';
 
 function signInPage(res: Response, status: number, returnToApp = false) {
   const title = status === 200 ? 'You’re signed in' : 'Sign-in didn’t finish';
-  const message = status === 200 ? 'Return to Pen Fight Aura Wars to play Ranked.'
-    : 'Return to Pen Fight Aura Wars and try signing in again.';
+  const message = status === 200 ? 'Return to Pen Fight Aura Wars to load your progress.'
+    : status === 404 ? 'There’s no fighter profile for this Google account. Return to the game and choose Sign up.'
+      : 'Return to Pen Fight Aura Wars and try signing in again.';
   const button = returnToApp
     ? '<a href="intent://ranked-auth/complete#Intent;scheme=penfightaurawars;package=com.penfightroyale.game;end">Return to game</a>'
     : '<p class="hint">You can close this tab.</p>';
@@ -51,6 +55,7 @@ a { display: block; padding: 14px; margin-top: 24px; border-radius: 12px; backgr
 }
 
 interface RankedAccountStore {
+  get(accountId: string): Identity | undefined | Promise<Identity | undefined>;
   createAccountSession(identity: Identity, now: number): string | Promise<string>;
   revokeAccountSession(authorization: string | undefined): void | Promise<void>;
 }
@@ -70,13 +75,17 @@ export function createRankedAuth(store: RankedAccountStore, config: RankedAuthCo
   const active = (value: Challenge | undefined) => value && value.deadline > Date.now() ? value : undefined;
   router.post('/auth/google', (req, res) => {
     const name = typeof req.body?.displayName === 'string' ? req.body.displayName.trim() : '';
-    if (!/^[\p{L}\p{N}][\p{L}\p{N} _'-]{1,23}$/u.test(name)) { res.sendStatus(400); return; }
+    const mode = req.body?.mode ?? 'legacy';
+    const fullName = typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
+    if (mode !== 'signin' && mode !== 'signup' && mode !== 'legacy') { res.sendStatus(400); return; }
+    if (mode !== 'signin' && !/^[\p{L}\p{N}][\p{L}\p{N} _'-]{1,23}$/u.test(name)) { res.sendStatus(400); return; }
+    if (mode === 'signup' && !/^[\p{L}\p{M}][\p{L}\p{M} .'-]{1,49}$/u.test(fullName)) { res.sendStatus(400); return; }
     for (const [key, challenge] of challenges) if (!active(challenge)) challenges.delete(key);
     if (challenges.size >= 200) { res.sendStatus(429); return; }
     const key = secret();
     const launch = secret();
     challenges.set(key, {
-      launch, deadline: Date.now() + lifetime, name, state: secret(), verifier: secret(),
+      launch, deadline: Date.now() + lifetime, name, mode, fullName, state: secret(), verifier: secret(),
       started: false, consumed: false, returnToApp: req.body?.returnToApp === true,
     });
     res.status(201).json({ check: key, url: new URL(`/api/online/auth/google/start/${launch}`, redirect).href });
@@ -146,7 +155,16 @@ export function createRankedAuth(store: RankedAccountStore, config: RankedAuthCo
         ({ sub } = await response.json());
       }
       if (typeof sub !== 'string' || !/^[\w.-]{1,128}$/.test(sub)) throw new Error('Invalid subject');
-      attempt.identity = { id: `google:${sub}`, displayName: attempt.name };
+      const id = `google:${sub}`;
+      const existing = await store.get(id);
+      if (!existing && attempt.mode === 'signin') {
+        attempt.accountMissing = true;
+        signInPage(res, 404, attempt.returnToApp);
+        return;
+      }
+      attempt.identity = existing && (attempt.mode !== 'signup' || existing.username)
+        ? { id, displayName: existing.displayName }
+        : { id, displayName: attempt.name, ...(attempt.mode === 'signup' && { username: attempt.name, fullName: attempt.fullName }) };
       signInPage(res, 200, attempt.returnToApp);
     } catch {
       attempt.failed = true;
@@ -157,6 +175,7 @@ export function createRankedAuth(store: RankedAccountStore, config: RankedAuthCo
   router.post('/auth/google/check', async (req, res, next) => {
     const attempt = typeof req.body?.check === 'string' ? active(challenges.get(req.body.check)) : undefined;
     if (!attempt || attempt.failed) { res.sendStatus(410); return; }
+    if (attempt.accountMissing) { res.sendStatus(404); return; }
     if (attempt.token) { res.json({ token: attempt.token }); return; }
     if (!attempt.identity || attempt.redeeming) { res.sendStatus(202); return; }
     attempt.redeeming = true;

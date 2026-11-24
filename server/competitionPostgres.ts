@@ -79,11 +79,15 @@ export class PostgresCompetitionStore {
   async open(identity: Identity, database: Pool | PoolClient = this.pool): Promise<CompetitiveProfile> {
     const current = await database.query<{ data: CompetitiveProfile }>(
       `SELECT data FROM ${schema}.competitors WHERE id = $1`, [identity.id]);
-    if (current.rows[0]?.data.displayName === identity.displayName) return current.rows[0].data;
+    const existing = current.rows[0]?.data;
+    if (existing && (existing.username || (!identity.username && existing.displayName === identity.displayName))) return existing;
     const { rows } = await database.query<{ data: CompetitiveProfile }>(
       `INSERT INTO ${schema}.competitors (id, data) VALUES ($1, $2)
-       ON CONFLICT(id) DO UPDATE SET data = jsonb_set(competitors.data, '{displayName}', to_jsonb($3::text))
-       RETURNING data`, [identity.id, newCompetitor(identity), identity.displayName]);
+       ON CONFLICT(id) DO UPDATE SET data = CASE WHEN competitors.data ? 'username' THEN competitors.data
+         ELSE competitors.data || $3::jsonb END
+       RETURNING data`, [identity.id, newCompetitor(identity), {
+        displayName: identity.displayName, ...(identity.username && { username: identity.username, fullName: identity.fullName }),
+      }]);
     return rows[0].data;
   }
 
