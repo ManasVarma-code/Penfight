@@ -13,6 +13,7 @@ import {
 } from '@capacitor-community/admob';
 import { profileRepo } from '../persistence';
 import { AdLifecycleState, RewardIntent, RewardPlacement } from '../types';
+import { AD_QA_ENABLED } from './adQa';
 
 export interface AdMobConfig {
   appId: string;
@@ -23,12 +24,10 @@ export interface AdMobConfig {
   testingDevices: string[];
   bannerBottomMarginDp: number;
   isNativeAndroid: boolean;
-  showPublisherConsole: boolean;
 }
 
 export interface ActivePreviewAd {
   kind: 'rewarded' | 'interstitial';
-  unitId: string;
   intent?: RewardIntent;
   durationSeconds: number;
   resolve: (outcome: 'earned' | 'unearned' | 'shown' | 'failed') => void;
@@ -50,6 +49,17 @@ const INTERSTITIAL_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes (Blueprint §8.3)
 const PRELOAD_RETRY_COOLDOWN_MS = 15_000;
 const DISMISS_WAIT_TIMEOUT_MS = 3_500;
 
+export function rewardedLoadFailure(error: unknown): string {
+  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  const reason = typeof message === 'string' ? message.toLowerCase() : '';
+  if (reason.includes('app not ready') || reason.includes('not ready to show ads')) return 'AdMob says this app is not ready to serve ads.';
+  if (String(code) === '3' || reason.includes('no fill')) return 'AdMob returned no ad for this request (code 3).';
+  if (String(code) === '2' || reason.includes('network')) return 'AdMob could not connect (code 2). Try again on another network.';
+  if (String(code) === '1' || reason.includes('invalid request')) return 'AdMob rejected the ad request (code 1).';
+  if (String(code) === '8' || reason.includes('app id missing')) return 'AdMob could not find the app configuration (code 8).';
+  return 'The rewarded ad could not load. Try again shortly.';
+}
+
 function parseEnv(): Record<string, string | undefined> {
   const metaEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
   if (metaEnv) return metaEnv;
@@ -59,7 +69,6 @@ function parseEnv(): Record<string, string | undefined> {
 
 class AdMobService {
   public state: AdLifecycleState = 'IDLE';
-  public bannerVisible = false;
   public qaInstantInterstitial = false; // Dev/QA switch inside Publisher Console
   public consentStatus: AdmobConsentStatus = AdmobConsentStatus.UNKNOWN;
   public canRequestAds = !this.isNative();
@@ -69,7 +78,11 @@ class AdMobService {
 
   private initPromise: Promise<void> | null = null;
   private initialized = false;
+  private lastInitFailure = -Infinity;
+  private rewardedIssue: string | null = null;
   private bannerCreated = false;
+  private bannerActive = false;
+  private bannerInset = 0;
   private bannerRequested = false;
   private bannerQueue: Promise<void> = Promise.resolve();
   private bannerListenerAttached = false;
@@ -82,7 +95,7 @@ class AdMobService {
   private activePreview: ActivePreviewAd | null = null;
   private previewListeners = new Set<(ad: ActivePreviewAd | null) => void>();
   private stateListeners = new Set<(state: AdLifecycleState) => void>();
-  private bannerListeners = new Set<(visible: boolean) => void>();
+  private bannerListeners = new Set<(inset: number) => void>();
   private privacyListeners = new Set<(required: boolean) => void>();
 
   getConfig(): AdMobConfig {
@@ -94,7 +107,6 @@ class AdMobService {
         testingDevices: [],
         bannerBottomMarginDp: 18,
         isNativeAndroid,
-        showPublisherConsole: false,
       };
     }
 
@@ -119,12 +131,19 @@ class AdMobService {
       testingDevices,
       bannerBottomMarginDp,
       isNativeAndroid,
-      showPublisherConsole: env.VITE_SHOW_PUBLISHER_CONSOLE !== 'false',
     };
   }
 
   private isNative(): boolean {
     return typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  }
+
+  supportsAdPlacements(): boolean {
+    return this.isNative() || AD_QA_ENABLED;
+  }
+
+  getRewardedFailureMessage(): string {
+    return this.rewardedIssue ?? 'The rewarded ad could not open. Try again shortly.';
   }
 
   private setState(next: AdLifecycleState): void {
@@ -144,10 +163,16 @@ class AdMobService {
     return () => this.stateListeners.delete(fn);
   }
 
-  subscribeBanner(fn: (visible: boolean) => void): () => void {
+  subscribeBanner(fn: (inset: number) => void): () => void {
     this.bannerListeners.add(fn);
-    fn(this.bannerVisible);
+    fn(this.bannerInset);
     return () => this.bannerListeners.delete(fn);
+  }
+
+  private setBannerInset(inset: number): void {
+    if (inset === this.bannerInset) return;
+    this.bannerInset = inset;
+    for (const fn of this.bannerListeners) fn(inset);
   }
 
   subscribePrivacyOptions(fn: (required: boolean) => void): () => void {
@@ -190,14 +215,17 @@ class AdMobService {
    * Initializes Google Mobile Ads SDK & UMP Privacy Consent (native Android),
    * then kicks off background preloading for Rewarded & Interstitial ads.
    */
-  async initialize(): Promise<void> {
+  async initialize(retry = false): Promise<void> {
     if (this.initialized) return;
     if (this.initPromise) return this.initPromise;
+    if (this.isNative() && (!this.isOnline() ||
+        (!retry && Date.now() - this.lastInitFailure < PRELOAD_RETRY_COOLDOWN_MS))) return;
 
     this.initPromise = this.performInitialize();
     try {
       await this.initPromise;
     } finally {
+      if (!this.initialized) this.lastInitFailure = Date.now();
       this.initPromise = null;
     }
   }
@@ -243,10 +271,17 @@ class AdMobService {
         });
         void AdMob.addListener(BannerAdPluginEvents.FailedToLoad, () => {
           this.bannerCreated = false;
+          this.bannerActive = false;
+          this.setBannerInset(0);
+        });
+        void AdMob.addListener(BannerAdPluginEvents.SizeChanged, ({ height }) => {
+          const canShow = this.bannerRequested && this.canRequestAds
+            && Number.isFinite(height) && height > 0;
+          this.setBannerInset(canShow ? height + cfg.bannerBottomMarginDp : 0);
         });
       }
 
-      this.initialized = true;
+      this.initialized = this.nativeInitialized && this.canRequestAds;
 
       // Background preloading for instant show & higher fill rates (Fix #5)
       if (this.canRequestAds && this.isOnline()) {
@@ -265,10 +300,10 @@ class AdMobService {
     try {
       await AdMob.showPrivacyOptionsForm();
       this.canRequestAds = false;
+      this.initialized = false;
       this.rewardedPreloaded = false;
       this.interstitialPreloaded = false;
-      this.applyConsent(await AdMob.requestConsentInfo());
-      await this.initializeNativeAds(this.getConfig());
+      await this.initialize(true);
     } catch {
       // The game remains available if the privacy form or refresh fails.
       if (!this.nativeInitialized) this.canRequestAds = false;
@@ -298,7 +333,8 @@ class AdMobService {
         });
         this.rewardedPreloaded = true;
         return true;
-      } catch {
+      } catch (error) {
+        this.rewardedIssue = rewardedLoadFailure(error);
         this.rewardedPreloaded = false;
         this.lastRewardedFailAt = Date.now();
         return false;
@@ -344,35 +380,30 @@ class AdMobService {
   }
 
   /**
-   * Adaptive Bottom Banner — strictly shown ONLY on Menu & Pen Locker,
+   * Adaptive bottom banner for the unobstructed main menu,
    * automatically hidden during active desk gameplay to prevent accidental clicks.
    * Uses showBanner() once, then hideBanner() / resumeBanner() lifecycle (Fix #4),
    * plus edge-to-edge bottom margin clearance for Android 15/16 gesture bars.
    */
   async setMenuBannerVisible(visible: boolean): Promise<void> {
     this.bannerRequested = visible;
+    if (!visible) this.setBannerInset(0);
     this.bannerQueue = this.bannerQueue.then(() => this.syncMenuBanner());
     await this.bannerQueue;
   }
 
   private async syncMenuBanner(): Promise<void> {
+    if (!this.isNative()) return;
     if (this.bannerRequested && this.isOnline()) await this.initialize();
     const visible = this.bannerRequested && this.isOnline() && this.canRequestAds;
-    if (this.bannerVisible === visible) return;
-    if (!this.isNative()) {
-      // Web preview tracks simulated menu banner visibility cleanly
-      if (visible) {
-        profileRepo.commit((d) => {
-          d.adMetrics.bannerImpressions += 1;
-        });
-      }
-    } else try {
+    if (this.bannerActive === visible) return;
+    try {
       if (visible) {
         const cfg = this.getConfig();
         if (!this.bannerCreated) {
           await AdMob.showBanner({
             adId: cfg.bannerUnitId,
-            adSize: BannerAdSize.ADAPTIVE_BANNER,
+            adSize: cfg.isTestMode ? BannerAdSize.BANNER : BannerAdSize.ADAPTIVE_BANNER,
             position: BannerAdPosition.BOTTOM_CENTER,
             margin: cfg.bannerBottomMarginDp,
             isTesting: cfg.isTestMode,
@@ -391,15 +422,15 @@ class AdMobService {
         return;
       }
     }
-    this.bannerVisible = visible;
-    for (const fn of this.bannerListeners) fn(visible);
+    this.bannerActive = visible;
+    if (!visible) this.setBannerInset(0);
   }
 
   async destroyBanner(): Promise<void> {
     this.bannerRequested = false;
     await this.bannerQueue;
-    this.bannerVisible = false;
-    for (const fn of this.bannerListeners) fn(false);
+    this.bannerActive = false;
+    this.setBannerInset(0);
     if (!this.isNative() || !this.bannerCreated) return;
     try {
       await AdMob.removeBanner();
@@ -412,7 +443,7 @@ class AdMobService {
 
   isAvailable(): boolean {
     return (
-      this.isOnline() &&
+      this.supportsAdPlacements() && this.isOnline() &&
       this.canRequestAds &&
       this.state !== 'SHOWING' &&
       this.state !== 'LOADING'
@@ -428,7 +459,10 @@ class AdMobService {
   async showRewarded(
     intent: RewardIntent
   ): Promise<'earned' | 'unearned' | 'failed'> {
+    if (!this.supportsAdPlacements()) return 'failed';
+    this.rewardedIssue = null;
     if (!this.isOnline()) {
+      this.rewardedIssue = 'Connect to the internet to load rewarded ads.';
       this.setState('FAILED');
       profileRepo.commit((d) => {
         d.adMetrics.rewardedFailed += 1;
@@ -436,8 +470,11 @@ class AdMobService {
       return 'failed';
     }
 
-    await this.initialize();
-    if (!this.canRequestAds) {
+    await this.initialize(true);
+    if (!this.canRequestAds || (this.isNative() && !this.nativeInitialized)) {
+      this.rewardedIssue = this.consentStatus === AdmobConsentStatus.REQUIRED
+        ? 'Complete the ad privacy prompt to retry.'
+        : 'AdMob could not finish the privacy check. Try again.';
       return this.finalizeRewarded(intent.placement, 'failed');
     }
 
@@ -527,13 +564,14 @@ class AdMobService {
       }
     }
 
-    // Web Developer/Publisher Test Ad Preview Simulator
+    if (!AD_QA_ENABLED) return this.finalizeRewarded(intent.placement, 'failed');
+
+    // Local web QA simulator
     this.setState('READY');
     this.setState('SHOWING');
     const outcome = await new Promise<'earned' | 'unearned' | 'failed'>((resolve) => {
       this.emitPreview({
         kind: 'rewarded',
-        unitId: cfg.rewardedUnitId,
         intent,
         durationSeconds: 5,
         resolve: (res) => {
@@ -585,7 +623,7 @@ class AdMobService {
    * - No rewarded ad was watched during the just-completed match
    */
   canShowSmartInterstitial(watchedRewardedInMatch: boolean): boolean {
-    if (!this.isOnline() || !this.canRequestAds) return false;
+    if (!this.supportsAdPlacements() || !this.isOnline() || !this.canRequestAds) return false;
     if (watchedRewardedInMatch) return false;
     const p = profileRepo.get();
     if (this.qaInstantInterstitial) {
@@ -602,6 +640,7 @@ class AdMobService {
     watchedRewardedInMatch: boolean,
     forceForQa = false
   ): Promise<'shown' | 'skipped' | 'failed'> {
+    if (!this.supportsAdPlacements()) return 'skipped';
     if (!forceForQa && !this.canShowSmartInterstitial(watchedRewardedInMatch)) {
       profileRepo.commit((d) => {
         d.adMetrics.interstitialSkipped += 1;
@@ -670,11 +709,14 @@ class AdMobService {
       }
     }
 
+    if (!AD_QA_ENABLED) {
+      this.setState('IDLE');
+      return 'skipped';
+    }
     this.setState('SHOWING');
     const res = await new Promise<'shown' | 'failed'>((resolve) => {
       this.emitPreview({
         kind: 'interstitial',
-        unitId: cfg.interstitialUnitId,
         durationSeconds: 3,
         resolve: (outcome) => {
           this.emitPreview(null);

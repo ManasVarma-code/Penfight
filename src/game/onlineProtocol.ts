@@ -1,6 +1,8 @@
 import type { FlickCommand, PhysicsEvent, PhysicsSnapshot } from './types';
+import type { RankedHistoryEntry } from './ranking';
 
 export type OnlineSide = 'p1' | 'p2';
+export type DuelMode = 'guest' | 'ranked';
 export type OnlineFlick = Pick<FlickCommand, 'aimRadians' | 'gripOffset01' | 'normalizedPower'>;
 
 export const ONLINE_DESK = 'school_oak';
@@ -36,4 +38,10 @@ export type OnlineStatus =
       now: number;
       state: OnlineMatchState;
       replay?: OnlineReplay;
+      ranked?: {
+        id: string;
+        startsAt: number;
+        players: Record<OnlineSide, { displayName: string; rating: number }>;
+        result?: RankedHistoryEntry;
+      };
     };

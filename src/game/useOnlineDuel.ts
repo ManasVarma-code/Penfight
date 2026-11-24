@@ -1,7 +1,8 @@
 import { Capacitor } from '@capacitor/core';
 import { useEffect, useRef, useState } from 'react';
 import { gameEngine } from './engine';
-import type { OnlineFlick, OnlineStatus } from './onlineProtocol';
+import type { DuelMode, OnlineFlick, OnlineStatus } from './onlineProtocol';
+import type { RankedHistoryEntry } from './ranking';
 
 type Phase = 'idle' | 'searching' | 'playing' | 'reconnecting' | 'error';
 
@@ -9,21 +10,34 @@ export function useOnlineDuel() {
   const [phase, setPhase] = useState<Phase>('idle');
   const [message, setMessage] = useState('');
   const [turnSeconds, setTurnSeconds] = useState<number | null>(null);
-  const sessionRef = useRef<{ token?: string; stop: () => void } | null>(null);
+  const [mode, setMode] = useState<DuelMode>('guest');
+  const [rankedPair, setRankedPair] = useState<Extract<OnlineStatus, { status: 'matched' }>>();
+  const [result, setResult] = useState<RankedHistoryEntry>();
+  const [versus, setVersus] = useState(false);
+  const sessionRef = useRef<{ token?: string; stop: (release?: boolean) => Promise<RankedHistoryEntry | undefined> } | null>(null);
 
-  useEffect(() => () => sessionRef.current?.stop(), []);
+  useEffect(() => () => { void sessionRef.current?.stop(); }, []);
 
-  function leave() {
-    sessionRef.current?.stop();
+  async function leave() {
+    const leaving = sessionRef.current?.stop();
     sessionRef.current = null;
     gameEngine.startAttractMode();
     setPhase('idle');
     setMessage('');
     setTurnSeconds(null);
+    setVersus(false);
+    setRankedPair(undefined);
+    setResult(undefined);
+    return leaving;
   }
 
-  function findMatch() {
-    sessionRef.current?.stop();
+  function findMatch(nextMode: DuelMode = 'guest', accountToken?: string | null) {
+    const prior = sessionRef.current?.stop();
+    if (sessionRef.current) gameEngine.startAttractMode();
+    setMode(nextMode);
+    setResult(undefined);
+    setRankedPair(undefined);
+    setVersus(false);
     setMessage('');
     const origin = (import.meta.env.VITE_ONLINE_SERVER_URL ?? '').trim().replace(/\/+$/, '');
     if (!origin && Capacitor.isNativePlatform()) {
@@ -38,6 +52,7 @@ export function useOnlineDuel() {
     let revision = -1;
     let hadMatch = false;
     let lastSeen = Date.now();
+    let intro: ReturnType<typeof setTimeout> | undefined;
     const session: NonNullable<typeof sessionRef.current> = { stop };
     sessionRef.current = session;
 
@@ -53,18 +68,24 @@ export function useOnlineDuel() {
       });
     }
 
-    function release() {
-      if (session.token) void request('session', { method: 'DELETE', keepalive: true }).catch(() => {});
+    async function release(): Promise<RankedHistoryEntry | undefined> {
+      if (!session.token) return;
+      try {
+        const response = await request('session', { method: 'DELETE', keepalive: true });
+        if (response.ok && response.status === 200) return (await response.json()).result;
+      } catch { /* An expired connection is resolved by the server. */ }
     }
 
-    function stop() {
+    async function stop(shouldRelease = true) {
       closed = true;
       clearTimeout(timer);
-      release();
+      clearTimeout(intro);
+      return shouldRelease ? release() : undefined;
     }
 
     function fail(reason: string) {
-      stop();
+      void stop(false);
+      setVersus(false);
       gameEngine.startAttractMode();
       setMessage(reason);
       setPhase('error');
@@ -93,6 +114,13 @@ export function useOnlineDuel() {
         if (closed) return;
         lastSeen = Date.now();
         if (status.status === 'matched') {
+          const introTime = status.ranked ? status.ranked.startsAt - status.now : 0;
+          if (!hadMatch && status.ranked && !status.state.winner && introTime > 0) {
+            setRankedPair(status);
+            setVersus(true);
+            intro = setTimeout(() => setVersus(false), introTime);
+          }
+          if (status.ranked?.result) setResult(status.ranked.result);
           hadMatch = true;
           revision = status.state.revision;
           gameEngine.setOnlineState(status, submit);
@@ -105,7 +133,7 @@ export function useOnlineDuel() {
         }
       } catch {
         if (closed) return;
-        if (Date.now() - lastSeen > 35_000) {
+        if (Date.now() - lastSeen > (nextMode === 'ranked' && hadMatch ? 50_000 : 35_000)) {
           fail('The match server could not be reached.');
           return;
         }
@@ -117,7 +145,16 @@ export function useOnlineDuel() {
 
     void (async () => {
       try {
-        const response = await request('join', { method: 'POST' });
+        await prior;
+        if (closed) return;
+        const response = await request('join', nextMode === 'ranked' ? {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(accountToken && { Authorization: `Bearer ${accountToken}` }) },
+          body: JSON.stringify({ mode: 'ranked' }),
+        } : { method: 'POST' });
+        if (response.status === 401) { fail('Sign in again to join Ranked 1v1.'); return; }
+        if (response.status === 409) { fail('Your account already has an active match.'); return; }
+        if (response.status === 503 && nextMode === 'ranked') { fail('Ranked matchmaking is currently unavailable.'); return; }
         if (!response.ok) throw new Error('Join failed');
         const joined: { token: string } = await response.json();
         session.token = joined.token;
@@ -129,5 +166,5 @@ export function useOnlineDuel() {
     })();
   }
 
-  return { phase, message, turnSeconds, findMatch, leave };
+  return { phase, message, turnSeconds, mode, rankedPair, result, versus, findMatch, leave };
 }

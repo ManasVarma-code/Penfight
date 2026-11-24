@@ -27,7 +27,7 @@ export function mulberry32(seed: number): () => number {
 }
 
 // Per 1/120s substep physics tuning constants (independent of render FPS & DPI)
-const BASE_IMPULSE_MAG = 28.5; // Crisp full-desk travel with high-stakes edge risk
+const BASE_IMPULSE_MAG = 28;
 const MAX_SPEED_PER_STEP = 13.5; // < pen diameter to prevent tunneling at max Turbo
 const MAX_OMEGA_PER_STEP = 0.25; // ~30 rad/s cap for numerical stability
 const BASE_MASS_SCALE = 2.4;
@@ -35,7 +35,6 @@ const BASE_MASS_SCALE = 2.4;
 interface ManagedPen {
   owner: PlayerId;
   spec: PenSpec;
-  masteryMult: number; // 1.00 .. 1.05 (Tournament only)
   body: Matter.Body;
   outOfBounds: boolean;
   overhangRatio: number;
@@ -58,8 +57,9 @@ export class MatterPhysicsAdapter {
   private activeShooter: PlayerId = 'p1';
   private pendingEvents: PhysicsEvent[] = [];
   private restAccumulator = 0;
+  private tournament = false;
 
-  constructor() {
+  constructor(private readonly preserveHostedGuestPhysics = false) {
     this.engine = Matter.Engine.create({
       gravity: { x: 0, y: 0, scale: 0 },
       positionIterations: 8,
@@ -77,8 +77,7 @@ export class MatterPhysicsAdapter {
     spec: PenSpec,
     x: number,
     y: number,
-    angle: number,
-    masteryMult: number
+    angle: number
   ): ManagedPen {
     const innerLen = Math.max(16, spec.length - spec.radius * 2);
     const r = spec.radius;
@@ -94,7 +93,7 @@ export class MatterPhysicsAdapter {
 
     const compound = Matter.Body.create({
       parts: [rect, capLeft, capRight],
-      restitution: 0.82,
+      restitution: this.tournament ? 0.60 : this.preserveHostedGuestPhysics ? 0.82 : 0.79,
       friction: 0.08,
       frictionStatic: 0.12,
       frictionAir: 0,
@@ -114,7 +113,6 @@ export class MatterPhysicsAdapter {
     return {
       owner,
       spec,
-      masteryMult,
       body: compound,
       outOfBounds: false,
       overhangRatio: 0,
@@ -135,12 +133,12 @@ export class MatterPhysicsAdapter {
     pen2Spec: PenSpec,
     p2Owner: 'ai' | 'p2',
     desk: DeskSpec,
-    p1MasteryMult = 1.0,
-    p2MasteryMult = 1.0
+    tournament = false
   ): void {
     Matter.World.clear(this.engine.world, false);
     this.engine.timing.lastDelta = FIXED_DT * 1000;
     this.desk = desk;
+    this.tournament = tournament;
     this.pendingEvents = [];
     this.activeShotId = '';
     this.restAccumulator = 0;
@@ -150,25 +148,23 @@ export class MatterPhysicsAdapter {
     const cy = (DESK_RECT.top + DESK_RECT.bottom) / 2;
 
     // Mirrored stable spawn positions with slight seeded organic angle variance
-    const offsetX = (rng() - 0.5) * 40;
-    const offsetY = 128 + (rng() - 0.5) * 16;
-    const tilt = (rng() - 0.5) * 0.26;
+    const offsetX = (rng() - 0.5) * (tournament ? 10 : 40);
+    const offsetY = (tournament ? 124 : 128) + (rng() - 0.5) * 16;
+    const tilt = (rng() - 0.5) * (tournament ? 0.11 : 0.26);
 
     this.pen1 = this.createPenBody(
       'p1',
       pen1Spec,
       cx + offsetX,
       cy + offsetY,
-      tilt,
-      p1MasteryMult
+      tilt
     );
     this.pen2 = this.createPenBody(
       p2Owner,
       pen2Spec,
       cx - offsetX,
       cy - offsetY,
-      Math.PI + tilt,
-      p2MasteryMult
+      Math.PI + tilt
     );
 
     Matter.World.add(this.engine.world, [this.pen1.body, this.pen2.body]);
@@ -179,11 +175,12 @@ export class MatterPhysicsAdapter {
     Matter.Engine.clear(this.engine);
     this.engine.timing.lastDelta = FIXED_DT * 1000;
     this.desk = desk;
+    this.tournament = snapshot.tournament === true;
     this.pendingEvents = [];
     this.restAccumulator = 0;
     const { p1, p2 } = snapshot;
-    this.pen1 = this.createPenBody(p1.owner, p1.spec, p1.x, p1.y, p1.angle, 1);
-    this.pen2 = this.createPenBody(p2.owner, p2.spec, p2.x, p2.y, p2.angle, 1);
+    this.pen1 = this.createPenBody(p1.owner, p1.spec, p1.x, p1.y, p1.angle);
+    this.pen2 = this.createPenBody(p2.owner, p2.spec, p2.x, p2.y, p2.angle);
     Matter.World.add(this.engine.world, [this.pen1.body, this.pen2.body]);
   }
 
@@ -201,14 +198,13 @@ export class MatterPhysicsAdapter {
     managed.activeTurbo = turboMult > 1.01;
 
     const powerClamped = Math.max(0.05, Math.min(1, command.normalizedPower));
-    const easedPower = Math.pow(powerClamped, 1.3);
+    const easedPower = Math.pow(powerClamped, managed.spec.powerCurve ?? 1.3);
     const gripClamped = Math.max(-1, Math.min(1, command.gripOffset01));
 
     const jMag =
-      BASE_IMPULSE_MAG *
+      (this.preserveHostedGuestPhysics ? 28.5 : BASE_IMPULSE_MAG) *
       easedPower *
       managed.spec.power *
-      managed.masteryMult *
       turboMult *
       suddenDeathMult;
 
@@ -230,7 +226,7 @@ export class MatterPhysicsAdapter {
     const torque = rx * jy - ry * jx;
     // Scale angular impulse cleanly so off-center flicks produce crisp, controllable whip spins
     const dOmega =
-      (torque / managed.body.inertia) * managed.spec.spin * managed.masteryMult * 1.45;
+      (torque / managed.body.inertia) * managed.spec.spin * 1.45;
 
     const nextVx = managed.body.velocity.x + dvx;
     const nextVy = managed.body.velocity.y + dvy;
@@ -341,15 +337,20 @@ export class MatterPhysicsAdapter {
 
   private applyDeskFriction(pen: ManagedPen): void {
     if (pen.outOfBounds) return;
-    const fMult = this.desk.frictionMult * pen.spec.grip;
+    const pushed = pen.owner !== this.activeShooter;
+    // Slightly polish the slower Oak surface in Tournament to reduce stalled rallies.
+    const surface = this.tournament && this.desk.id === 'school_oak' ? 0.96 : this.desk.frictionMult;
+    const impactGrip = (pen.spec.impactGrip ?? 1) * (this.tournament ? 1.24 : 1);
+    const fMult = surface * pen.spec.grip * (pushed ? impactGrip : 1);
     const vx = pen.body.velocity.x;
     const vy = pen.body.velocity.y;
     const speed = Math.hypot(vx, vy);
 
     if (speed > 0.0001) {
       // Viscous + Coulomb kinetic desk sliding friction
-      const viscous = Math.max(0, 1 - 0.0085 * fMult);
-      let nextSpeed = speed * viscous - 0.015 * fMult;
+      const slidingDrag = this.tournament && pushed ? 0.0085 + Math.max(0, speed - 2.8) * 0.0006 : 0.0085;
+      const viscous = Math.max(0, 1 - slidingDrag * fMult);
+      let nextSpeed = speed * viscous - (this.preserveHostedGuestPhysics ? 0.015 : 0.0155) * fMult;
       if (nextSpeed < 0) nextSpeed = 0;
       if (nextSpeed > MAX_SPEED_PER_STEP) nextSpeed = MAX_SPEED_PER_STEP;
       const scale = nextSpeed / speed;
@@ -522,6 +523,7 @@ export class MatterPhysicsAdapter {
       p1: this.toState(this.pen1),
       p2: this.toState(this.pen2),
       isAtRest: this.restAccumulator >= 0.45,
+      ...(this.tournament && { tournament: true as const }),
     };
   }
 }

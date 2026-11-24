@@ -1,10 +1,15 @@
-import React, { useState } from 'react';
-import { Check, Film, Gift, Lock, Sparkles, X } from 'lucide-react';
+import React, { lazy, Suspense, useState } from 'react';
+import { Check, Film, Gem, Gift, Lock, Wrench, X } from 'lucide-react';
+import { adService } from '../game/ads/adService';
 import { DESKS, PENS } from '../game/content';
+import { getPenUpgradeLevel, isPenPurchaseUnlocked } from '../game/garage';
+import { getPenRequirement } from '../game/progression';
 import { getLocalDayKey } from '../game/persistence';
-import { PenSpec, ProfileV1 } from '../game/types';
+import { PenSpec, PenUpgradePart, ProfileV1 } from '../game/types';
 import { PenPreviewSvg } from './GameLogo';
 import { useOnlineStatus } from './PWAComponents';
+
+const GarageWorkbench = lazy(() => import('./GarageWorkbench'));
 
 interface PenLockerModalProps {
   profile: ProfileV1;
@@ -13,7 +18,7 @@ interface PenLockerModalProps {
   onClose: () => void;
   onEquipPen: (penId: string) => void;
   onUnlockPen: (pen: PenSpec) => void;
-  onUpgradeMastery: (penId: string) => void;
+  onUpgradePen: (penId: string, part: PenUpgradePart, level: number) => boolean;
   onWatchPenTrialAd: (pen: PenSpec) => void;
   onWatchCoinChestAd: () => void;
   onEquipDesk: (deskId: string) => void;
@@ -24,11 +29,10 @@ const StatBar: React.FC<{ label: string; value: number; color: string }> = ({
   value,
   color,
 }) => {
-  // Normalize 0.80..1.35 into 25%..100% bar visual
-  const pct = Math.max(20, Math.min(100, ((value - 0.72) / 0.62) * 100));
+  const pct = Math.max(20, Math.min(100, ((value - 0.55) / 1.05) * 100));
   return (
     <div className="flex items-center gap-2 text-[11px]">
-      <span className="w-11 text-slate-400 shrink-0">{label}</span>
+      <span className="w-12 text-slate-400 shrink-0">{label}</span>
       <div className="h-1.5 flex-1 rounded-full bg-slate-800 overflow-hidden">
         <div
           className={`h-full rounded-full ${color}`}
@@ -49,13 +53,16 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
   onClose,
   onEquipPen,
   onUnlockPen,
-  onUpgradeMastery,
+  onUpgradePen,
   onWatchPenTrialAd,
   onWatchCoinChestAd,
   onEquipDesk,
 }) => {
   const [tab, setTab] = useState<'pens' | 'desks'>('pens');
+  const [workbenchPenId, setWorkbenchPenId] = useState<string | null>(null);
+  const workbenchPen = PENS.find((pen) => pen.id === workbenchPenId && profile.unlockedPens.includes(pen.id));
   const isOnline = useOnlineStatus();
+  const supportsAds = adService.supportsAdPlacements();
 
   const today = getLocalDayKey();
   const chestsUsedToday = profile.localChestDay === today ? profile.localChestCount : 0;
@@ -63,28 +70,29 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/75 p-0 sm:p-4">
-      <div className="flex max-h-[90dvh] w-full max-w-md flex-col rounded-t-3xl sm:rounded-3xl border border-slate-700/80 bg-[#111827] shadow-2xl overflow-hidden">
+      <div role="dialog" aria-modal="true" aria-labelledby="garage-title"
+        className="flex max-h-[92dvh] w-full max-w-md flex-col rounded-t-3xl sm:rounded-3xl border border-slate-700/80 bg-[#111827] shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
           <div>
-            <h2 className="font-display text-lg font-extrabold text-white">
-              Pen Locker
+            <h2 id="garage-title" className="font-display text-lg font-extrabold text-white">
+              Pen Garage
             </h2>
             <p className="text-xs text-slate-400">
-              Unlock pens with Aura Points
+              {workbenchPen ? 'Workbench' : 'Pens and arenas'}
             </p>
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5 font-mono-num text-sm font-bold text-yellow-300"
               aria-label={`${profile.coins.toLocaleString()} Aura Points`}>
-              <Sparkles className="w-4 h-4 text-yellow-400" aria-hidden="true" />
+              <Gem className="w-4 h-4 text-yellow-400" aria-hidden="true" />
               {profile.coins.toLocaleString()}
             </div>
             <button
               type="button"
               onClick={onClose}
               className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white transition"
-              aria-label="Close Pen Locker"
+              aria-label="Close Pen Garage"
             >
               <X className="w-4 h-4" />
             </button>
@@ -92,7 +100,7 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
         </div>
 
         {/* Lucky Pencil Box: +100 Aura Points, up to twice a day */}
-        <div className="border-b border-slate-800 bg-[#162033] px-5 py-3 flex items-center justify-between gap-3">
+        {!workbenchPen && supportsAds && <div className="border-b border-slate-800 bg-[#162033] px-5 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-yellow-400/15 text-yellow-300 shrink-0">
               <Gift className="w-5 h-5" />
@@ -120,10 +128,10 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
                 ? 'Limit Reached'
                 : 'Watch Ad'}
           </button>
-        </div>
+        </div>}
 
         {/* Tabs */}
-        <div className="grid grid-cols-2 gap-1.5 px-5 pt-3">
+        {!workbenchPen && <div className="grid grid-cols-2 gap-1.5 px-5 pt-3">
           <button
             type="button"
             onClick={() => setTab('pens')}
@@ -146,17 +154,24 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
           >
             Desk Arenas ({profile.unlockedDeskIds.length}/{DESKS.length})
           </button>
-        </div>
+        </div>}
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-          {tab === 'pens'
+        <div key={workbenchPen?.id ?? tab} className="min-h-0 flex-1 touch-pan-y overflow-y-auto px-5 pt-4 pb-6 space-y-3 [scrollbar-width:thin] [scrollbar-color:#475569_transparent]">
+          {workbenchPen
+            ? <Suspense fallback={<p role="status" className="py-6 text-center text-sm text-slate-300">Opening workbench…</p>}>
+                <GarageWorkbench pen={workbenchPen} profile={profile}
+                  onBack={() => setWorkbenchPenId(null)} onUpgrade={onUpgradePen} />
+              </Suspense>
+            : tab === 'pens'
             ? PENS.map((pen) => {
                 const unlocked = profile.unlockedPens.includes(pen.id);
                 const equipped = profile.equippedPenId === pen.id && !trialPenId;
                 const isTrial = trialPenId === pen.id;
-                const mastery = profile.penMastery[pen.id] || 0;
-                const masteryCost = 120 + mastery * 90;
+                const gripLevel = getPenUpgradeLevel(profile, pen.id, 'grip');
+                const nibLevel = getPenUpgradeLevel(profile, pen.id, 'nib');
+                const canPurchase = isPenPurchaseUnlocked(profile, pen);
+                const requirement = getPenRequirement(pen.requiredTournamentWins, profile.defeatedRivals);
                 const canAfford = profile.coins >= pen.unlockCoins;
 
                 return (
@@ -198,8 +213,25 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
                       <StatBar label="Mass" value={pen.mass} color="bg-rose-400" />
                       <StatBar label="Power" value={pen.power} color="bg-yellow-400" />
                       <StatBar label="Spin" value={pen.spin} color="bg-violet-400" />
-                      <StatBar label="Grip" value={pen.grip} color="bg-emerald-400" />
+                      <StatBar label="Stability" value={pen.grip * (pen.impactGrip ?? 1)} color="bg-emerald-400" />
                     </div>
+                    {unlocked ? (
+                      <p className="mt-2 text-xs font-medium text-slate-400">
+                        Grip Lv. {gripLevel} · Nib Lv. {nibLevel}
+                      </p>
+                    ) : (
+                      <div className="mt-2 space-y-1 text-xs font-medium">
+                        <div className="flex items-start justify-between gap-2 text-amber-200">
+                          <span>{requirement.label}</span>
+                          <span className="shrink-0">{requirement.progress}/{pen.requiredTournamentWins}</span>
+                        </div>
+                        <p className="text-slate-400">
+                          {canPurchase
+                            ? canAfford ? 'Ready to buy' : `${(pen.unlockCoins - profile.coins).toLocaleString()} more Aura Points needed`
+                            : 'Win against new rivals to unlock this pen.'}
+                        </p>
+                      </div>
+                    )}
 
                     <div className="mt-3.5 flex items-center gap-2">
                       {unlocked ? (
@@ -217,36 +249,30 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
                             {equipped ? 'Active Pen' : 'Equip'}
                           </button>
 
-                          {/* Capped Tournament Mastery track (+5% max, disabled in Pass & Play) */}
                           <button
                             type="button"
-                            disabled={mastery >= 5 || profile.coins < masteryCost}
-                            onClick={() => onUpgradeMastery(pen.id)}
-                            className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/90 px-3 py-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-45 transition whitespace-nowrap"
-                            title="Tournament mastery (+1% per level, capped at +5%, disabled in Pass & Play)"
-                            aria-label={mastery >= 5 ? 'Maximum mastery reached' : `Upgrade mastery for ${masteryCost} Aura Points`}
+                            onClick={() => setWorkbenchPenId(pen.id)}
+                            className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-cyan-700/70 bg-cyan-950 px-3 text-xs font-bold text-cyan-100 hover:bg-cyan-900 transition"
+                            aria-label={`Upgrade ${pen.name}`}
                           >
-                            <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-                            {mastery >= 5
-                              ? 'Max +5%'
-                              : `Mastery +${mastery}% (${masteryCost})`}
+                            <Wrench className="w-3.5 h-3.5" /> Upgrade
                           </button>
                         </>
                       ) : (
                         <>
                           <button
                             type="button"
-                            disabled={!canAfford}
+                            disabled={!canAfford || !canPurchase}
                             onClick={() => onUnlockPen(pen)}
                             aria-label={`Unlock ${pen.name} for ${pen.unlockCoins} Aura Points`}
                             className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-yellow-400 py-2.5 text-xs font-extrabold text-slate-950 hover:bg-yellow-300 disabled:bg-slate-800 disabled:text-slate-500 active:scale-[0.98] transition whitespace-nowrap"
                           >
-                            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
-                            Unlock · {pen.unlockCoins}
+                            <Gem className="w-3.5 h-3.5" aria-hidden="true" />
+                            Buy · {pen.unlockCoins.toLocaleString()}
                           </button>
 
                           {/* High-Converting Rewarded Ad: Try Locked Pen for 1 Match */}
-                          <button
+                          {supportsAds && <button
                             type="button"
                             disabled={!isOnline || isTrial || adBusy}
                             onClick={() => onWatchPenTrialAd(pen)}
@@ -258,7 +284,7 @@ export const PenLockerModal: React.FC<PenLockerModalProps> = ({
                               : isTrial
                                 ? 'Trial Active'
                                 : 'Try Free (Ad)'}
-                          </button>
+                          </button>}
                         </>
                       )}
                     </div>

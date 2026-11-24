@@ -20,11 +20,18 @@ export type PenStyleKind =
   | 'spinner'
   | 'fountain';
 
+export type PenUpgradePart = 'grip' | 'nib';
+
 export interface PenSpec {
+  /** Additional surface drag when another pen knocks this one along the desk. */
+  impactGrip?: number;
+  /** Mid-power response of the flick input. */
+  powerCurve?: number;
   id: string;
   name: string;
   tagline: string;
   unlockCoins: number;
+  requiredTournamentWins: number;
   style: PenStyleKind;
   // Relative physics multipliers (Blueprint §5)
   mass: number;
@@ -104,6 +111,7 @@ export interface PhysicsEvent {
 }
 
 export interface PhysicsSnapshot {
+  tournament?: true;
   p1: PenBodyState;
   p2: PenBodyState;
   isAtRest: boolean;
@@ -128,12 +136,17 @@ export interface MatchLedger {
   baseCoins: number;
   oneShotKoBonus: number;
   firstCritBonus: number;
+  firstClearBonus?: number;
+  achievementBonus?: number;
+  newAchievements?: string[];
+  doubleCoinsBonus?: number;
   totalCoins: number;
   doubled: boolean;
   opponentName: string;
   opponentRank: string;
   wasBoss: boolean;
   unlockedNewDesk?: string;
+  weekly?: { complete: boolean; expired: boolean };
 }
 
 export type RewardPlacement =
@@ -181,12 +194,16 @@ export interface ProfileV1 {
   coins: number;
   unlockedPens: string[];
   equippedPenId: string;
-  penMastery: Record<string, number>; // 0..5 levels (+1% each, max +5% Tournament only)
+  penMastery: Record<string, number>; // Saved nib levels, including legacy mastery purchases
+  penGripLevels: Record<string, number>;
   unlockedDeskIds: string[];
   equippedDeskId: string;
   highestTournamentOpponent: number; // Zero-based index of the furthest unlocked rival
   selectedOpponentIndex: number;
   tournamentWins: number;
+  defeatedRivals: number[];
+  weeklyTournament?: import('./weeklyTournament').WeeklyProgress;
+  lifetimeAuraEarned: number;
   totalKOs: number;
   currentWinStreak: number;
   bestWinStreak: number;
@@ -198,6 +215,9 @@ export interface ProfileV1 {
   reducedMotion: boolean;
   localChestDay: string;
   localChestCount: number;
+  dailyDoubleDay: string;
+  dailyDoubleCount: number;
+  pendingDoubleOffer?: { matchId: string; points: number };
   adMetrics: AdMetrics;
 }
 

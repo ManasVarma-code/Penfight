@@ -1,5 +1,6 @@
 import { DESK_RECT, WORLD_H, WORLD_W } from '../content';
 import { AimPreviewState, DeskSpec, PenBodyState } from '../types';
+import { PEN_DETAILS } from './penDetails';
 
 export interface SparkParticle {
   x: number;
@@ -516,6 +517,8 @@ export class CanvasRenderer {
     this.roundRect(ctx, -halfL + 10, -r * 0.78, spec.length - 34, r * 0.58, r * 0.3);
     ctx.fill();
 
+    this.drawBarrelDetails(ctx, halfL, r, spec);
+
     // Impact white hit flash
     if (pen.hitFlash > 0.02) {
       ctx.save();
@@ -526,6 +529,61 @@ export class CanvasRenderer {
       ctx.restore();
     }
 
+    ctx.restore();
+  }
+
+  private drawBarrelDetails(ctx: CanvasRenderingContext2D, halfL: number, r: number, spec: PenBodyState['spec']): void {
+    const detail = PEN_DETAILS[spec.style];
+    ctx.save();
+    ctx.fillStyle = detail.ink;
+    ctx.font = '700 5.5px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(detail.mark, -halfL + 43, r * 0.26, 34);
+    ctx.strokeStyle = detail.ink;
+    ctx.lineWidth = 0.85;
+    ctx.globalAlpha *= 0.64;
+    ctx.beginPath();
+    const seam = halfL - 24;
+    switch (spec.style) {
+      case 'ballpoint':
+        ctx.moveTo(-halfL + 18, r * 0.65);
+        ctx.lineTo(seam - 4, r * 0.65);
+        break;
+      case 'gel':
+        for (const offset of [0, 2, 5]) {
+          ctx.moveTo(seam + offset, -r * 0.64);
+          ctx.lineTo(seam + offset, r * 0.64);
+        }
+        break;
+      case 'highlighter':
+        ctx.moveTo(seam + 7, 0);
+        ctx.lineTo(halfL - 4, -r * 0.22);
+        break;
+      case 'marker':
+        for (const y of [-0.53, 0.57]) {
+          ctx.moveTo(seam - 14, y * r);
+          ctx.lineTo(seam + 3, y * r);
+        }
+        break;
+      case 'spinner':
+        for (const offset of [0, 7]) {
+          ctx.moveTo(seam - 26 + offset, -r * 0.48);
+          ctx.lineTo(seam - 21 + offset, 0);
+          ctx.lineTo(seam - 26 + offset, r * 0.48);
+        }
+        break;
+      case 'fountain':
+        ctx.moveTo(seam + 6, 0);
+        ctx.lineTo(halfL - 2, 0);
+        ctx.moveTo(seam - 11, -4);
+        ctx.lineTo(seam - 7, 0);
+        ctx.lineTo(seam - 11, 4);
+        ctx.lineTo(seam - 15, 0);
+        ctx.closePath();
+        break;
+    }
+    ctx.stroke();
     ctx.restore();
   }
 

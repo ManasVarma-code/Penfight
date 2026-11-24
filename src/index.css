@@ -41,3 +41,28 @@
 .safe-bottom {
   padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
 }
+
+@media (prefers-reduced-motion: no-preference) {
+  .gold-unlock-reveal { animation: gold-unlock-rise 500ms cubic-bezier(.2,.75,.3,1) both; }
+}
+
+@keyframes gold-unlock-rise {
+  from { transform: translateY(22px) scale(.94); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes rank-promotion {
+  0% { transform: scale(.86); opacity: .45; }
+  65% { transform: scale(1.07); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.opening-pen-blue { transform: rotate(-24deg); animation: opening-blue 700ms cubic-bezier(.2,.8,.3,1) both; }
+.opening-pen-gold { transform: rotate(152deg); animation: opening-gold 700ms cubic-bezier(.2,.8,.3,1) both; }
+@keyframes opening-blue {
+  from { opacity: 0; transform: translate(-115px, 38px) rotate(-44deg); }
+  to { opacity: 1; transform: rotate(-24deg); }
+}
+@keyframes opening-gold {
+  from { opacity: 0; transform: translate(110px, -38px) rotate(180deg); }
+  to { opacity: 1; transform: rotate(152deg); }
+}
+@media (prefers-reduced-motion: reduce) { .opening-pen { animation: none; } }

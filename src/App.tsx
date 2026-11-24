@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AdMobOverlay } from './components/AdMobOverlay';
 import { HudOverlay } from './components/HudOverlay';
+import { GameSettings } from './components/GameSettings';
+import { OpeningScreen } from './components/OpeningScreen';
 import {
   MatchOverModal,
   PassHandoffModal,
@@ -8,16 +10,25 @@ import {
   SecondChanceModal,
 } from './components/MatchModals';
 import { PenLockerModal } from './components/PenLockerModal';
+import { ProgressModal } from './components/ProgressModal';
+import { RankedResult, RankedSignIn, RankedVersus } from './components/RankedViews';
+import { PenPreviewSvg } from './components/GameLogo';
 import { PublisherConsoleModal } from './components/PublisherConsoleModal';
 import { OfflineIndicator } from './components/PWAComponents';
 import { TitleScreen } from './components/TitleScreen';
+import { WeeklyTournament } from './components/WeeklyTournament';
 import { ActivePreviewAd, adService } from './game/ads/adService';
+import { AD_QA_ENABLED } from './game/ads/adQa';
 import { soundSynth } from './game/audio';
 import { getDeskById, getOpponentByIndex, getPenById } from './game/content';
 import { gameEngine } from './game/engine';
-import { getLocalDayKey, profileRepo } from './game/persistence';
+import { currentOfflineSlot, getLocalDayKey, profileRepo, switchOfflineSlot } from './game/persistence';
+import { GOLD_PEN_ID } from './game/progression';
 import { useOnlineDuel } from './game/useOnlineDuel';
-import { HudSnapshot, MatchMode, PenSpec, ProfileV1 } from './game/types';
+import { useRankedAccount } from './game/useRankedAccount';
+import { useOfflineBackup } from './game/useOfflineBackup';
+import type { RankedHistoryEntry } from './game/ranking';
+import { HudSnapshot, MatchMode, PenSpec, PenUpgradePart, ProfileV1 } from './game/types';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -47,17 +58,90 @@ export default function App() {
   }));
 
   const [lockerOpen, setLockerOpen] = useState(false);
+  const [weeklyOpen, setWeeklyOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [splash, setSplash] = useState(true);
+  const [guest, setGuest] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [publisherOpen, setPublisherOpen] = useState(false);
+  const [progressOpen, setProgressOpen] = useState(false);
+  const [progressInitialView, setProgressInitialView] = useState<'overview' | 'rank'>('overview');
+  const [rankedSignIn, setRankedSignIn] = useState<'queue' | 'account' | null>(null);
+  const [exitRankedResult, setExitRankedResult] = useState<RankedHistoryEntry>();
+  const [goldCelebration, setGoldCelebration] = useState(false);
   const [previewAd, setPreviewAd] = useState<ActivePreviewAd | null>(null);
   const [adBusy, setAdBusy] = useState(false);
-  const [bannerVisible, setBannerVisible] = useState(false);
+  const [bannerInset, setBannerInset] = useState(0);
   const [trialPenId, setTrialPenId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const online = useOnlineDuel();
+  const account = useRankedAccount();
+  const initialToken = useRef(account.token);
+  const [profileReady, setProfileReady] = useState(false);
+  const backup = useOfflineBackup(account.token, profileReady, hud.shellState === 'TITLE_MENU');
+  const offlineCachedAccount = backup.status === 'offline' && account.token === initialToken.current &&
+    currentOfflineSlot() !== 'guest';
+  const restoring = !!account.token && !backup.ready && !offlineCachedAccount;
+  const startupSignIn = !account.token && !guest && !splash && profileReady;
+  const showOpening = splash || !profileReady || restoring;
   const [confirmOnlineLeave, setConfirmOnlineLeave] = useState(false);
   const findingMatch = hud.shellState === 'TITLE_MENU' && (
     online.phase === 'searching' || online.phase === 'reconnecting' || online.phase === 'error'
   );
+  const menuCovered = showOpening || startupSignIn || settingsOpen || lockerOpen || weeklyOpen || publisherOpen || progressOpen || goldCelebration || findingMatch || !!previewAd
+    || !!rankedSignIn || !!exitRankedResult;
+  const showMenuBanner = hud.shellState === 'TITLE_MENU' && !menuCovered;
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setSplash(false), 1050);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  useEffect(() => {
+    gameEngine.setMenuCovered(menuCovered);
+    return () => gameEngine.setMenuCovered(false);
+  }, [menuCovered]);
+
+  useEffect(() => {
+    let active = true;
+    const syncBanner = () => { void adService.setMenuBannerVisible(showMenuBanner); };
+    const onVisible = () => { if (document.visibilityState === 'visible') syncBanner(); };
+    const onOnline = () => {
+      if (showMenuBanner) void adService.initialize(true).then(() => { if (active) syncBanner(); });
+    };
+    syncBanner();
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      active = false;
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [showMenuBanner]);
+
+  useEffect(() => {
+    if (!rankedSignIn || !account.token || !backup.ready) return;
+    if (rankedSignIn === 'queue') online.findMatch('ranked', account.token);
+    setRankedSignIn(null);
+  }, [account.token, backup.ready, rankedSignIn]);
+
+  const latestRankedResult = online.result?.id ?? exitRankedResult?.id;
+  useEffect(() => {
+    if (latestRankedResult) void account.refresh();
+  }, [latestRankedResult, account.refresh]);
+  useEffect(() => {
+    if (online.phase === 'error' && online.mode === 'ranked') void account.refresh();
+  }, [online.phase, online.mode, account.refresh]);
+
+  function openProgress(view: 'overview' | 'rank') {
+    setProgressInitialView(view);
+    setProgressOpen(true);
+  }
+
+  function queueRanked() {
+    if (account.token) online.findMatch('ranked', account.token);
+    else setRankedSignIn('queue');
+  }
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -66,12 +150,42 @@ export default function App() {
     }, 2800);
   };
 
+  function continueAsGuest() {
+    if (!switchOfflineSlot('guest', null)) {
+      showToast('Could not open the guest save. Your progress is still on this device.');
+      return;
+    }
+    account.cancel();
+    account.signOut();
+    setRankedSignIn(null);
+    setGuest(true);
+    gameEngine.startAttractMode();
+  }
+
+  async function saveAndSignOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await backup.saveNow();
+      if (!switchOfflineSlot('guest', null)) {
+        showToast('Could not set aside your local save. You’re still signed in.');
+        return;
+      }
+      account.signOut();
+      setRankedSignIn(null);
+      setSettingsOpen(false);
+      setProgressOpen(false);
+      setGuest(false);
+      gameEngine.startAttractMode();
+    } finally { setSigningOut(false); }
+  }
+
   useEffect(() => {
     soundSynth.setMuted(profileRepo.get().muted);
     void profileRepo.hydrate().then((p) => {
       setProfile(p);
       soundSynth.setMuted(p.muted);
-    });
+    }).finally(() => setProfileReady(true));
     if (profileRepo.recoveryWarning) {
       showToast(profileRepo.recoveryWarning);
     }
@@ -80,14 +194,14 @@ export default function App() {
       setProfile(next);
       soundSynth.setMuted(next.muted);
     });
-    const unsubAdPreview = adService.subscribePreview((ad) => setPreviewAd(ad));
-    const unsubBanner = adService.subscribeBanner((vis) => setBannerVisible(vis));
+    const unsubAdPreview = AD_QA_ENABLED ? adService.subscribePreview(setPreviewAd) : undefined;
+    const unsubBanner = adService.subscribeBanner(setBannerInset);
 
     void adService.initialize();
 
     return () => {
       unsubProfile();
-      unsubAdPreview();
+      unsubAdPreview?.();
       unsubBanner();
     };
   }, []);
@@ -109,10 +223,7 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (
         hud.shellState === 'TITLE_MENU' &&
-        !lockerOpen &&
-        !publisherOpen &&
-        !previewAd &&
-        !findingMatch &&
+        !menuCovered &&
         !(e.target instanceof HTMLElement && e.target.closest('button, input, a')) &&
         (e.key === 'Enter' || e.key === ' ')
       ) {
@@ -122,7 +233,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [hud.shellState, lockerOpen, publisherOpen, previewAd, findingMatch, profile.selectedOpponentIndex]);
+  }, [hud.shellState, menuCovered, profile.selectedOpponentIndex]);
 
   const handleToggleMute = () => {
     soundSynth.unlock();
@@ -170,15 +281,15 @@ export default function App() {
     } else if (outcome === 'unearned') {
       showToast('Ad closed early — reward not granted.');
     } else {
-      showToast('Ad unavailable right now.');
+      showToast(adService.getRewardedFailureMessage());
     }
   };
 
   // --- REWARDED AD PLACEMENT 2: Double Match Aura Points ---
   const handleWatchDoubleCoins = async () => {
-    if (adBusy || !hud.ledger || hud.ledger.doubled) return;
+    if (adBusy || !hud.ledger || hud.ledger.doubled || !hud.ledger.doubleCoinsBonus) return;
     setAdBusy(true);
-    const bonus = hud.ledger.totalCoins;
+    const bonus = hud.ledger.doubleCoinsBonus;
     const txId = `double_coins_${hud.ledger.matchId}`;
     const outcome = await adService.showRewarded({
       rewardRequestId: txId,
@@ -190,14 +301,14 @@ export default function App() {
     setAdBusy(false);
 
     if (outcome === 'earned') {
-      const granted = profileRepo.grantCoinsAtomic(txId, bonus);
+      const granted = profileRepo.claimTournamentDouble(hud.ledger.matchId, bonus);
       if (granted) {
         soundSynth.playCoinBurst();
         gameEngine.markLedgerDoubled(bonus);
         showToast(`+${bonus} bonus Aura Points!`);
       }
     } else if (outcome === 'unearned') {
-      showToast('Watch the full ad to double your Aura Points.');
+      showToast('Watch the full ad to double your battle payout.');
     } else {
       showToast('Ad could not load. Your Aura Points are saved.');
     }
@@ -225,7 +336,7 @@ export default function App() {
     } else if (outcome === 'unearned') {
       showToast('Ad closed early — trial not activated.');
     } else {
-      showToast('Ad unavailable right now.');
+      showToast(adService.getRewardedFailureMessage());
     }
   };
 
@@ -264,13 +375,20 @@ export default function App() {
     } else if (outcome === 'unearned') {
       showToast('Ad closed early. No Aura Points earned.');
     } else {
-      showToast('Ad unavailable right now.');
+      showToast(adService.getRewardedFailureMessage());
     }
   };
 
   // --- SMART INTERSTITIAL AT NATURAL BETWEEN-MATCH TRANSITION ---
   const handleNextOrReplay = async (nextOpponentIndex?: number) => {
     if (adBusy) return;
+    if (hud.ledger?.weekly) {
+      if (hud.ledger.weekly.complete || hud.ledger.weekly.expired || !gameEngine.startWeeklyMatch()) {
+        gameEngine.startAttractMode();
+        setWeeklyOpen(true);
+      }
+      return;
+    }
     setAdBusy(true);
     await adService.maybeShowInterstitial(gameEngine.didWatchRewardedThisMatch());
     setAdBusy(false);
@@ -292,37 +410,25 @@ export default function App() {
   };
 
   const handleUnlockPen = (pen: PenSpec) => {
-    if (profile.coins < pen.unlockCoins || profile.unlockedPens.includes(pen.id)) return;
+    if (!profileRepo.buyPen(pen.id)) return;
     soundSynth.playCoinBurst();
     gameEngine.setTrialPen(null);
     setTrialPenId(null);
-    profileRepo.commit((d) => {
-      if (d.coins >= pen.unlockCoins && !d.unlockedPens.includes(pen.id)) {
-        d.coins -= pen.unlockCoins;
-        d.unlockedPens.push(pen.id);
-        d.equippedPenId = pen.id;
-      }
-    });
-    showToast(`Unlocked & equipped ${pen.name}!`);
+    if (pen.id === GOLD_PEN_ID) {
+      setLockerOpen(false);
+      setGoldCelebration(true);
+    } else {
+      showToast(`Unlocked & equipped ${pen.name}!`);
+    }
     if (hud.shellState === 'TITLE_MENU') {
       gameEngine.startAttractMode();
     }
   };
 
-  const handleUpgradeMastery = (penId: string) => {
-    const cur = profile.penMastery[penId] || 0;
-    const cost = 120 + cur * 90;
-    if (cur >= 5 || profile.coins < cost) return;
+  const handleUpgradePen = (penId: string, part: PenUpgradePart, level: number): boolean => {
+    if (!profileRepo.upgradePen(penId, part, level)) return false;
     soundSynth.playCoinBurst();
-    profileRepo.commit((d) => {
-      const c = d.penMastery[penId] || 0;
-      const price = 120 + c * 90;
-      if (c < 5 && d.coins >= price) {
-        d.coins -= price;
-        d.penMastery[penId] = c + 1;
-      }
-    });
-    showToast(`Mastery +${cur + 1}% applied (Tournament)!`);
+    return true;
   };
 
   const handleEquipDesk = (deskId: string) => {
@@ -384,11 +490,15 @@ export default function App() {
         )}
 
         {/* Title Screen over Live Desk Attract Mode */}
-        {hud.shellState === 'TITLE_MENU' && (
+        {hud.shellState === 'TITLE_MENU' && !showOpening && !startupSignIn && (
           <TitleScreen
             profile={profile}
+            rankedProfile={account.profile}
+            onOpenRank={() => openProgress('rank')}
+            onFindRankedMatch={queueRanked}
+            onOpenWeekly={() => setWeeklyOpen(true)}
             trialPenId={trialPenId}
-            bannerVisible={bannerVisible}
+            bannerInset={bannerInset}
             onStartMatch={handleStartMatch}
             onFindOnlineMatch={() => {
               soundSynth.unlock();
@@ -405,8 +515,9 @@ export default function App() {
               soundSynth.playUiTap();
               setPublisherOpen(true);
             }}
-            onToggleMute={handleToggleMute}
+            onOpenSettings={() => setSettingsOpen(true)}
             onSelectOpponent={handleSelectOpponent}
+            onOpenProgress={() => openProgress('overview')}
           />
         )}
 
@@ -453,23 +564,26 @@ export default function App() {
               className="w-full max-w-sm rounded-3xl border border-slate-700 bg-[#111827] p-6 text-center">
               <h2 id="online-title" className="font-display text-2xl font-extrabold text-white">
                 {findingMatch
-                  ? online.phase === 'searching' ? 'Finding an opponent…' : 'Play Online'
+                  ? online.phase === 'searching' ? 'Finding an opponent…' : online.mode === 'ranked' ? 'Ranked 1v1' : 'Guest 1v1'
                   : hud.shellState === 'MATCH_OVER' ? hud.statusBanner : 'Leave this match?'}
               </h2>
               <p role="status" className="mt-2 text-sm text-slate-300">
                 {findingMatch
-                  ? online.message || 'Looking for another player.'
+                  ? online.message || (online.mode === 'ranked' ? 'Searching for players near your Aura Rating.' : 'Looking for another player.')
                   : hud.shellState === 'MATCH_OVER'
                     ? `Final score ${hud.scoreP1}–${hud.scoreP2}`
-                    : 'Leaving gives your opponent the win.'}
+                    : online.mode === 'ranked' ? 'Leaving an active ranked match can lower your rating.' : 'Leaving gives your opponent the win.'}
               </p>
+              {online.result && hud.shellState === 'MATCH_OVER' && <RankedResult result={online.result} />}
+              {online.mode === 'ranked' && hud.shellState === 'MATCH_OVER' && !online.result &&
+                <p className="mt-3 text-xs text-slate-400">Rating unchanged. The match ended before both players took a turn.</p>}
               <div className="mt-5 flex justify-center gap-2">
                 {(online.phase === 'error' || hud.shellState === 'MATCH_OVER') && (
                   <button type="button" className="rounded-xl bg-yellow-400 px-4 py-2 font-bold text-slate-950"
                     onClick={() => {
                       setConfirmOnlineLeave(false);
-                      online.leave();
-                      online.findMatch();
+                      if (online.mode === 'ranked') queueRanked();
+                      else online.findMatch();
                     }}>
                     Find Match
                   </button>
@@ -481,16 +595,19 @@ export default function App() {
                   </button>
                 )}
                 <button type="button" className="rounded-xl border border-slate-600 px-4 py-2 font-bold text-white"
-                  onClick={() => {
+                  onClick={async () => {
                     setConfirmOnlineLeave(false);
-                    online.leave();
+                    const leavingMidMatch = confirmOnlineLeave && hud.shellState !== 'MATCH_OVER';
+                    const result = await online.leave();
+                    if (leavingMidMatch && result) setExitRankedResult(result);
                   }}>
-                  {findingMatch ? 'Back' : 'Main Menu'}
+                  {findingMatch ? 'Back' : confirmOnlineLeave && hud.shellState !== 'MATCH_OVER' ? 'Leave Match' : 'Main Menu'}
                 </button>
               </div>
             </section>
           </div>
         )}
+        {online.versus && online.rankedPair && !confirmOnlineLeave && <RankedVersus match={online.rankedPair} />}
         {hud.mode === 'online' && online.phase === 'reconnecting' && hud.shellState === 'PLAYING' && (
           <p role="status" className="pointer-events-none absolute inset-x-0 top-24 z-20 text-center text-sm font-bold text-yellow-300">
             {online.message}
@@ -509,7 +626,7 @@ export default function App() {
             muted={profile.muted}
             reducedMotion={profile.reducedMotion}
             onResume={() => gameEngine.resumeGame()}
-            onRestart={() => gameEngine.startMatch(hud.mode, hud.opponent.index)}
+            onRestart={() => gameEngine.restartMatch()}
             onQuit={() => gameEngine.startAttractMode()}
             onToggleMute={handleToggleMute}
             onToggleReducedMotion={handleToggleReducedMotion}
@@ -520,14 +637,17 @@ export default function App() {
         {toast && (
           <div
             role="status"
-            className="pointer-events-none absolute bottom-16 left-1/2 -translate-x-1/2 z-40 rounded-xl border border-slate-700 bg-[#0F172A]/95 px-4 py-2 text-xs font-semibold text-white shadow-xl whitespace-nowrap"
+            className="pointer-events-none absolute inset-x-5 bottom-16 z-[60] mx-auto w-fit max-w-full rounded-xl border border-slate-700 bg-[#0F172A]/95 px-4 py-2 text-center text-xs font-semibold text-white shadow-xl"
           >
             {toast}
           </div>
         )}
       </div>
 
-      {/* Pen Locker & Desk Arenas Modal */}
+      {weeklyOpen && <WeeklyTournament profile={profile} onClose={() => setWeeklyOpen(false)}
+        onPlay={() => { if (gameEngine.startWeeklyMatch()) setWeeklyOpen(false); }} />}
+
+      {/* Pen Garage and arenas */}
       {lockerOpen && (
         <PenLockerModal
           profile={profile}
@@ -536,7 +656,7 @@ export default function App() {
           onClose={() => setLockerOpen(false)}
           onEquipPen={handleEquipPen}
           onUnlockPen={handleUnlockPen}
-          onUpgradeMastery={handleUpgradeMastery}
+          onUpgradePen={handleUpgradePen}
           onWatchPenTrialAd={(pen) => void handleWatchPenTrialAd(pen)}
           onWatchCoinChestAd={() => void handleWatchCoinChestAd()}
           onEquipDesk={handleEquipDesk}
@@ -544,7 +664,7 @@ export default function App() {
       )}
 
       {/* AdMob Revenue & Google Play Store Console */}
-      {publisherOpen && (
+      {AD_QA_ENABLED && publisherOpen && (
         <PublisherConsoleModal
           profile={profile}
           onClose={() => setPublisherOpen(false)}
@@ -560,8 +680,42 @@ export default function App() {
         />
       )}
 
+      {progressOpen && <ProgressModal profile={profile} onClose={() => setProgressOpen(false)}
+        initialView={progressInitialView} rankedProfile={account.profile} backup={backup}
+        onSignIn={() => setRankedSignIn('account')} onSignOut={() => void saveAndSignOut()} />}
+      {settingsOpen && <GameSettings profile={profile} account={account.profile} signedIn={!!account.token}
+        backup={backup} signingOut={signingOut} onClose={() => setSettingsOpen(false)} onMute={handleToggleMute}
+        onMotion={handleToggleReducedMotion} onSignIn={() => { setSettingsOpen(false); setRankedSignIn('account'); }}
+        onSignOut={() => void saveAndSignOut()} />}
+      {(startupSignIn || (rankedSignIn && !account.token)) &&
+        <RankedSignIn account={account} startup={startupSignIn}
+          onClose={startupSignIn ? continueAsGuest : () => setRankedSignIn(null)} />}
+      {showOpening && <OpeningScreen restoring={!splash && restoring}
+        unavailable={backup.status === 'offline'} onGuest={continueAsGuest} />}
+      {exitRankedResult && <div className="fixed inset-0 z-40 grid place-items-center bg-black/80 p-5">
+        <section role="dialog" aria-modal="true" aria-label="Ranked result" className="w-full max-w-sm rounded-3xl border border-sky-800 bg-[#101c2d] p-5 text-center">
+          <h2 className="font-display text-xl font-bold">Ranked result</h2>
+          <RankedResult result={exitRankedResult} />
+          <button type="button" onClick={() => setExitRankedResult(undefined)}
+            className="mt-4 min-h-11 rounded-xl bg-cyan-300 px-5 text-sm font-bold text-slate-950">Done</button>
+        </section>
+      </div>}
+      {goldCelebration && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-[#070B14]/95 p-5">
+          <section role="dialog" aria-modal="true" aria-label="Gold Fountain unlocked"
+            className={`w-full max-w-sm rounded-3xl border border-amber-300/60 bg-gradient-to-b from-amber-950 to-slate-950 p-6 text-center ${profile.reducedMotion ? '' : 'gold-unlock-reveal'}`}>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-300">Golden Legacy</p>
+            <PenPreviewSvg pen={getPenById(GOLD_PEN_ID)} className="my-4 h-24 w-full drop-shadow-[0_0_18px_rgba(251,191,36,0.55)]" />
+            <h2 className="font-display text-3xl font-extrabold text-amber-100">Gold Fountain</h2>
+            <p className="mt-2 text-sm text-amber-200">Unlocked and equipped. Your Golden Legacy badge is saved to your profile.</p>
+            <button type="button" onClick={() => setGoldCelebration(false)}
+              className="mt-5 w-full rounded-xl bg-amber-300 py-3 font-extrabold text-slate-950">Continue</button>
+          </section>
+        </div>
+      )}
+
       {/* Interactive Web AdMob QA Preview Overlay */}
-      <AdMobOverlay ad={previewAd} />
+      {AD_QA_ENABLED && <AdMobOverlay ad={previewAd} />}
     </main>
   );
 }

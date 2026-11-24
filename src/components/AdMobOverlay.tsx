@@ -64,9 +64,6 @@ export const AdMobOverlay: React.FC<AdMobOverlayProps> = ({ ad }) => {
               ? `Verified Reward: ${ad.intent?.rewardSummary}`
               : 'Smart interstitial triggered at natural match break.'}
           </p>
-          <p className="mt-3 font-mono-num text-[10px] text-slate-500 break-all">
-            Unit ID: {ad.unitId}
-          </p>
         </div>
 
         {/* Progress Bar */}

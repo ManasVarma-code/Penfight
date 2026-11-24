@@ -5,8 +5,10 @@ import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const androidRelease = mode === 'android-release';
+  const adQa = command === 'serve' && mode === 'development'
+    && loadEnv(mode, process.cwd(), 'VITE_').VITE_SHOW_PUBLISHER_CONSOLE === 'true';
   const production = androidRelease ? loadEnv('production', process.cwd(), 'VITE_') : {};
   const onlineOrigin = production.VITE_ONLINE_SERVER_URL?.trim() ?? '';
   const releaseAdMob = androidRelease ? {
@@ -40,6 +42,7 @@ export default defineConfig(({ mode }) => {
   let outputDir = 'dist';
   return {
     define: {
+      __AD_QA_ENABLED__: JSON.stringify(adQa),
       __ANDROID_RELEASE_ADS__: JSON.stringify(androidRelease),
       __ANDROID_ADMOB_CONFIG__: JSON.stringify(releaseAdMob),
       ...(androidRelease && {
@@ -94,6 +97,8 @@ export default defineConfig(({ mode }) => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          // OAuth opens API endpoints as browser pages. They must reach the server.
+          navigateFallbackDenylist: [/^\/api(?:\/|$)/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

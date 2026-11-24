@@ -7,12 +7,14 @@ import {
   Play,
   RotateCcw,
   ShieldCheck,
-  Sparkles,
+  Gem,
   Trophy,
   Volume2,
   VolumeX,
+  Wrench,
 } from 'lucide-react';
 import { TOURNAMENT_LADDER } from '../game/content';
+import { adService } from '../game/ads/adService';
 import { HudSnapshot } from '../game/types';
 import { useOnlineStatus } from './PWAComponents';
 
@@ -134,8 +136,9 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
   if (!ledger) return null;
 
   const isTournament = hud.mode === 'tournament';
+  const weekly = ledger.weekly;
   const nextIndex = Math.min(TOURNAMENT_LADDER.length - 1, hud.opponent.index + 1);
-  const hasNextOpponent = isTournament && ledger.won && hud.opponent.index < TOURNAMENT_LADDER.length - 1;
+  const hasNextOpponent = isTournament && !weekly && ledger.won && hud.opponent.index < TOURNAMENT_LADDER.length - 1;
 
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#070B14]/88 p-5">
@@ -172,10 +175,12 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
               Next up: {TOURNAMENT_LADDER[nextIndex].name}
             </p>
           )}
-          {isTournament && ledger.won && !hasNextOpponent && (
+          {isTournament && !weekly && ledger.won && !hasNextOpponent && (
             <p className="mt-1.5 text-xs font-bold text-sky-300">Tournament ladder complete!</p>
           )}
-          {isTournament && !ledger.won && (
+          {weekly?.complete && <p className="mt-2 text-sm font-bold text-amber-200">Weekly Tournament cleared</p>}
+          {weekly?.expired && <p className="mt-2 text-sm text-slate-300">The next weekly bracket is open.</p>}
+          {isTournament && !ledger.won && !weekly?.expired && (
             <p className="mt-1.5 text-xs text-slate-400">Win a full match to advance.</p>
           )}
         </div>
@@ -183,12 +188,12 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
         {/* Match Aura Points ledger */}
         {isTournament && (
           <div className="mt-4 rounded-2xl border border-slate-800 bg-[#0B1120] p-4 space-y-2 text-xs">
-            <div className="flex justify-between text-slate-300">
-              <span>{ledger.won ? 'Match Victory Payout' : 'Match Participation'}</span>
+            {ledger.won && <div className="flex justify-between text-slate-300">
+              <span>{weekly ? 'Weekly stage reward' : 'Match Victory Payout'}</span>
               <span className="font-mono-num font-semibold text-white">
-                +{ledger.baseCoins}
+                +{ledger.baseCoins.toLocaleString()}
               </span>
-            </div>
+            </div>}
             {ledger.oneShotKoBonus > 0 && (
               <div className="flex justify-between text-yellow-300">
                 <span>1-Shot Knockout Bonus</span>
@@ -205,20 +210,33 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
                 </span>
               </div>
             )}
-            <div className="border-t border-slate-800 pt-2 flex items-center justify-between text-sm font-bold">
+            {!!ledger.firstClearBonus && (
+              <div className="flex justify-between text-cyan-200">
+                <span>First clear{ledger.wasBoss ? ' · Boss' : ''}</span>
+                <span>+{ledger.firstClearBonus.toLocaleString()}</span>
+              </div>
+            )}
+            {!!ledger.achievementBonus && (
+              <div className="flex justify-between gap-2 text-amber-200">
+                <span>{ledger.newAchievements?.join(' · ')}</span>
+                <span>+{ledger.achievementBonus.toLocaleString()}</span>
+              </div>
+            )}
+            <div className={`flex items-center justify-between text-sm font-bold ${ledger.won ? 'border-t border-slate-800 pt-2' : ''}`}>
               <span className="text-slate-200">
-                {ledger.doubled ? 'Aura Points (Doubled)' : 'Aura Points Earned'}
+                {ledger.doubled ? 'Aura Points · Ad bonus added' : ledger.won || weekly ? 'Aura Points earned' : 'Participation reward'}
               </span>
               <span className="flex items-center gap-1 font-mono-num text-yellow-300">
-                <Sparkles className="w-4 h-4 text-yellow-400" aria-hidden="true" />
-                +{ledger.totalCoins}
+                <Gem className="w-4 h-4 text-yellow-400" aria-hidden="true" />
+                +{ledger.totalCoins.toLocaleString()}{!ledger.won && ' AP'}
               </span>
             </div>
+            {!ledger.won && !weekly && <p className="text-xs text-slate-400">You receive 70% of the participation reward after a defeat.</p>}
           </div>
         )}
 
         {/* Double match Aura Points once per match */}
-        {isTournament && !ledger.doubled && ledger.totalCoins > 0 && (
+        {adService.supportsAdPlacements() && isTournament && !ledger.doubled && !!ledger.doubleCoinsBonus && (
           <button
             type="button"
             disabled={!isOnline || adBusy}
@@ -228,7 +246,7 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
             <Film className="w-4 h-4" />
             {!isOnline
               ? 'Connect to double Aura Points'
-              : 'Watch Ad · Double Aura Points'}
+              : `Double battle payout · +${ledger.doubleCoinsBonus.toLocaleString()}`}
           </button>
         )}
 
@@ -239,7 +257,7 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
           onClick={() => onNextOrReplay(hasNextOpponent ? nextIndex : hud.opponent.index)}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-yellow-400 px-5 py-3.5 font-display text-base font-extrabold text-slate-950 hover:bg-yellow-300 active:scale-[0.98] transition whitespace-nowrap"
         >
-          {hasNextOpponent ? (
+          {weekly?.complete || weekly?.expired ? 'View Weekly Tournament' : hasNextOpponent || (weekly && ledger.won) ? (
             <>
               Next Opponent
               <ArrowRight className="w-4 h-4" />
@@ -260,8 +278,8 @@ export const MatchOverModal: React.FC<MatchOverModalProps> = ({
             onClick={onOpenLocker}
             className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/80 py-2.5 text-xs font-bold text-slate-200 hover:bg-slate-700 transition whitespace-nowrap"
           >
-            <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-            Pen Locker
+            <Wrench className="w-3.5 h-3.5 text-yellow-400" />
+            Pen Garage
           </button>
           <button
             type="button"

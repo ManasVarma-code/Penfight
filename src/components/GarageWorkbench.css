@@ -1,0 +1,35 @@
+.garage-install-grip {
+  animation: garage-seat-grip 640ms cubic-bezier(0.25, 0.7, 0.25, 1) both;
+}
+
+.garage-install-nib {
+  animation: garage-seat-nib 560ms cubic-bezier(0.2, 0.75, 0.3, 1) both;
+}
+
+.garage-install-lock {
+  animation: garage-part-lock 350ms ease-out 430ms both;
+}
+
+@keyframes garage-seat-grip {
+  0% { opacity: 0; transform: translate(48px, -14px); }
+  30% { opacity: 1; transform: translate(34px, 0); }
+  76% { opacity: 1; transform: translate(-2px, 0); }
+  100% { opacity: 1; transform: translate(0, 0); }
+}
+
+@keyframes garage-seat-nib {
+  0% { opacity: 0; transform: translate(28px, -10px); }
+  35% { opacity: 1; transform: translate(14px, 0); }
+  78% { opacity: 1; transform: translate(-1.5px, 0); }
+  100% { opacity: 1; transform: translate(0, 0); }
+}
+
+@keyframes garage-part-lock {
+  from { opacity: 0.9; transform: scale(0.8); }
+  to { opacity: 0; transform: scale(1.6); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .garage-install-grip, .garage-install-nib { animation: none; }
+  .garage-install-lock { display: none; }
+}

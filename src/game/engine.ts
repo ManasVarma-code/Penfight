@@ -1,5 +1,6 @@
 import { adService } from './ads/adService';
-import { planAiFlick } from './ai/aiController';
+import { getTournamentReactionSeconds, planTournamentFlick } from './ai/aiController';
+import { getWeeklyTournament, weeklyWins, WEEKLY_REWARDS } from './weeklyTournament';
 import { soundSynth } from './audio';
 import {
   DOUBLE_KO_WINDOW_MS,
@@ -8,7 +9,6 @@ import {
   getDeskById,
   getOpponentByIndex,
   getPenById,
-  getTournamentRivalPen,
   HARD_TURN_TIMEOUT_SECONDS,
   MAX_DRAG_WORLD,
   MAX_SUBSTEPS,
@@ -16,12 +16,12 @@ import {
   PENS,
   REST_HOLD_SECONDS,
   SUDDEN_DEATH_START_SHOT,
-  TOURNAMENT_LADDER,
   TURBO_IMPULSE_MULT,
   WORLD_H,
   WORLD_W,
 } from './content';
 import { profileRepo } from './persistence';
+import { getTournamentPen } from './garage';
 import {
   ONLINE_DESK, ONLINE_FRAME_MS, ONLINE_PEN,
   type OnlineFlick, type OnlineSide, type OnlineStatus,
@@ -79,6 +79,7 @@ export class PenFightEngine {
   private shellState: GameShellState = 'TITLE_MENU';
   private prePauseState: GameShellState = 'PLAYING';
   private mode: MatchMode = 'tournament';
+  private weeklyMatch: { week: number; stage: number } | null = null;
   private turn: 'p1' | 'p2' = 'p1';
   private turnPhase: TurnPhase = 'AIMING';
   private roundNumber = 1;
@@ -108,8 +109,9 @@ export class PenFightEngine {
   // Turn & KO timers
   private turnSimElapsed = 0;
   private aiThinkTimer = 0;
-  private readonly aiThinkDuration = 0.65;
-  private aiPlan: ReturnType<typeof planAiFlick> | null = null;
+  private aiThinkDuration = 0;
+  private aiPlan: ReturnType<typeof planTournamentFlick> | null = null;
+  private menuCovered = false;
   private aiShot: FlickCommand | null = null;
   private firstRingOutOwner: 'p1' | 'p2' | null = null;
   private firstRingOutAtMs = 0;
@@ -330,6 +332,7 @@ export class PenFightEngine {
   }
 
   startAttractMode(): void {
+    this.weeklyMatch = null;
     this.aiPlan = null;
     this.aiShot = null;
     if (this.online) {
@@ -354,12 +357,30 @@ export class PenFightEngine {
       this.desk
     );
     this.attractTimer = 0.7;
-    void adService.setMenuBannerVisible(true);
     this.emitHud();
   }
 
-  startMatch(mode: MatchMode, opponentIndex?: number): void {
+  startWeeklyMatch(): boolean {
+    const tournament = getWeeklyTournament();
+    const progress = profileRepo.get().weeklyTournament;
+    const stage = weeklyWins(progress, tournament.week);
+    const opponent = tournament.rivals[stage];
+    if (opponent === undefined || (progress && progress.week > tournament.week)) return false;
+    this.startMatch('tournament', opponent, { week: tournament.week, stage });
+    return true;
+  }
+
+  restartMatch(): void {
+    if (!this.weeklyMatch) {
+      this.startMatch(this.mode, this.opponent.index);
+    } else if (!this.startWeeklyMatch()) {
+      this.startAttractMode();
+    }
+  }
+
+  startMatch(mode: MatchMode, opponentIndex?: number, weekly: { week: number; stage: number } | null = null): void {
     if (mode === 'online') return;
+    this.weeklyMatch = weekly;
     this.online = null;
     soundSynth.unlock();
     soundSynth.playUiTap();
@@ -371,11 +392,11 @@ export class PenFightEngine {
     this.mode = mode;
     const selectedIndex = opponentIndex ?? profile.selectedOpponentIndex;
     this.opponent = getOpponentByIndex(
-      mode === 'tournament' ? Math.min(selectedIndex, profile.highestTournamentOpponent) : selectedIndex
+      mode === 'tournament' && !weekly ? Math.min(selectedIndex, profile.highestTournamentOpponent) : selectedIndex
     );
 
     if (mode === 'tournament') {
-      profileRepo.commit((d) => {
+      if (!weekly) profileRepo.commit((d) => {
         d.selectedOpponentIndex = this.opponent.index;
       });
       this.desk = getDeskById(
@@ -383,8 +404,8 @@ export class PenFightEngine {
           ? profile.equippedDeskId
           : this.opponent.deskId
       );
-      this.p1Pen = getPenById(this.trialPenId ?? profile.equippedPenId);
-      this.p2Pen = getTournamentRivalPen(this.opponent.penId);
+      this.p1Pen = getTournamentPen(profile, getPenById(this.trialPenId ?? profile.equippedPenId));
+      this.p2Pen = getPenById(this.opponent.penId);
     } else {
       // Pass & Play: fair neutral stats, player's equipped desk
       this.desk = getDeskById(profile.equippedDeskId);
@@ -417,20 +438,13 @@ export class PenFightEngine {
   private setupRound(starter: 'p1' | 'p2'): void {
     this.aiPlan = null;
     this.aiShot = null;
-    const profile = profileRepo.get();
-    const p1Mastery =
-      this.mode === 'tournament'
-        ? 1 + (profile.penMastery[this.p1Pen.id] || 0) * 0.01
-        : 1.0;
-
     this.physics.initializeRound(
       this.matchSeed + this.roundNumber * 97 + this.shotCounter,
       this.p1Pen,
       this.p2Pen,
       this.mode === 'tournament' ? 'ai' : 'p2',
       this.desk,
-      p1Mastery,
-      1.0
+      this.mode === 'tournament'
     );
 
     this.turn = starter;
@@ -529,11 +543,13 @@ export class PenFightEngine {
     this.turnPhase = 'AI_THINKING';
     this.aiThinkTimer = 0;
     this.aiShot = null;
-    this.aiPlan = planAiFlick(
+    const shotId = `shot_${this.matchId}_${this.shotCounter + 1}`;
+    this.aiThinkDuration = getTournamentReactionSeconds(this.opponent.index, shotId);
+    this.aiPlan = planTournamentFlick(
       this.physics.snapshot(),
       this.desk,
       this.opponent.index,
-      `shot_${this.matchId}_${this.shotCounter + 1}`,
+      shotId,
       this.surgeP2 >= 100 ? TURBO_IMPULSE_MULT : 1,
       this.getSuddenDeathMult(this.shotsInRound + 1)
     );
@@ -784,9 +800,14 @@ export class PenFightEngine {
     return null;
   }
 
+  setMenuCovered(covered: boolean): void {
+    this.menuCovered = covered;
+  }
+
   private frame(ts: number): void {
     const rawDt = Math.max(0, (ts - this.lastFrameTs) / 1000);
     this.lastFrameTs = ts;
+    if (this.menuCovered && this.shellState === 'TITLE_MENU') return;
     const clampedDt = Math.min(rawDt, 0.05);
     this.timeSec += clampedDt;
 
@@ -1051,7 +1072,7 @@ export class PenFightEngine {
       soundSynth.playRingOut(p1WonRound);
       if (p1WonRound && this.shotsInRound === 1) {
         this.oneShotKoEarned = true;
-        this.addCallout('1-SHOT KO!', '+10 AURA POINTS', WORLD_W / 2, WORLD_H * 0.42, '#FACC15');
+        this.addCallout('1-SHOT KO!', 'PRECISION BONUS', WORLD_W / 2, WORLD_H * 0.42, '#FACC15');
       } else {
         this.addCallout(
           'RING OUT!',
@@ -1104,7 +1125,7 @@ export class PenFightEngine {
         this.mode === 'tournament' &&
         isMatchPointLoss &&
         !this.revivedThisMatch &&
-        adService.isOnline()
+        adService.isAvailable()
       ) {
         this.shellState = 'SECOND_CHANCE';
         this.emitHud();
@@ -1133,50 +1154,33 @@ export class PenFightEngine {
     this.shellState = 'MATCH_OVER';
     this.trialPenId = null; // 1-match pen trial completes
 
-    if (this.mode === 'tournament') {
-      const baseCoins = p1Won ? 60 : 20;
-      const oneShotKoBonus = p1Won && this.oneShotKoEarned ? 10 : 0;
-      const firstCritBonus = this.critAwardedThisMatch ? 5 : 0;
-      const totalCoins = baseCoins + oneShotKoBonus + firstCritBonus;
-
-      // Atomic deduplicated payout (Blueprint §7.1 & §7.2)
-      profileRepo.grantCoinsAtomic(`match_payout_${this.matchId}`, totalCoins);
-
-      let unlockedNewDesk: string | undefined;
-      profileRepo.commit((d) => {
-        d.matchesSinceInterstitial += 1;
-        if (p1Won) {
-          d.tournamentWins += 1;
-          d.currentWinStreak += 1;
-          d.bestWinStreak = Math.max(d.bestWinStreak, d.currentWinStreak);
-          // Unlock next opponent on ladder
-          if (this.opponent.index < TOURNAMENT_LADDER.length - 1) {
-            const nextOpp = this.opponent.index + 1;
-            d.highestTournamentOpponent = Math.max(d.highestTournamentOpponent, nextOpp);
-            d.selectedOpponentIndex = nextOpp;
-          }
-          // Unlock Exam Slate Table after beating Rank 2 Boss (index >= 7)
-          if (this.opponent.index >= 7 && !d.unlockedDeskIds.includes('exam_slate')) {
-            d.unlockedDeskIds.push('exam_slate');
-            unlockedNewDesk = 'Exam Slate Table';
-          }
-        } else {
-          d.currentWinStreak = 0;
-        }
-      });
+    if (this.weeklyMatch) {
+      const { week, stage } = this.weeklyMatch;
+      const now = Date.now();
+      const expired = getWeeklyTournament(now).week !== week;
+      const points = p1Won ? profileRepo.settleWeeklyWin(week, stage, this.opponent.index, now) : 0;
+      this.ledger = {
+        matchId: this.matchId, won: p1Won, baseCoins: points, totalCoins: points,
+        oneShotKoBonus: 0, firstCritBonus: 0, doubled: false,
+        opponentName: this.opponent.name, opponentRank: `Weekly Tournament · Match ${stage + 1} of ${WEEKLY_REWARDS.length}`,
+        wasBoss: this.opponent.isBoss,
+        weekly: { complete: stage === WEEKLY_REWARDS.length - 1 && p1Won && !expired, expired },
+      };
+      if (points) soundSynth.playCoinBurst();
+    } else if (this.mode === 'tournament') {
+      const reward = profileRepo.settleTournamentMatch(this.matchId, this.opponent.index,
+        p1Won, this.oneShotKoEarned, this.critAwardedThisMatch);
+      if (!reward) return;
+      const { nextRivals: _completed, ...payout } = reward;
 
       this.ledger = {
+        ...payout,
         matchId: this.matchId,
         won: p1Won,
-        baseCoins,
-        oneShotKoBonus,
-        firstCritBonus,
-        totalCoins,
         doubled: false,
         opponentName: this.opponent.name,
         opponentRank: this.opponent.rankName,
         wasBoss: this.opponent.isBoss,
-        unlockedNewDesk,
       };
       if (p1Won) soundSynth.playCoinBurst();
     } else {

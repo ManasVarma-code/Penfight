@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { adService } from '../src/game/ads/adService.ts';
 import { DESKS, FIXED_DT, PENS } from '../src/game/content.ts';
 import { profileRepo } from '../src/game/persistence.ts';
 import { MatterPhysicsAdapter } from '../src/game/physics/matterAdapter.ts';
@@ -18,6 +17,12 @@ function assert(cond: boolean, label: string, detail?: string): void {
 }
 
 async function run(): Promise<void> {
+  process.env.VITE_SHOW_PUBLISHER_CONSOLE = 'true';
+  const { adService, rewardedLoadFailure } = await import('../src/game/ads/adService.ts');
+  assert(rewardedLoadFailure({ code: '3' }).includes('no ad'), 'AdMob no-fill errors are visible');
+  assert(rewardedLoadFailure({ code: '2' }).includes('could not connect'), 'AdMob network errors are visible');
+  assert(rewardedLoadFailure({ code: '1', message: 'App not ready to show ads' }).includes('not ready'),
+    'AdMob app-readiness errors are distinct from no fill');
   // 1. Physics Tests (PHY-01, PHY-02, PHY-05/06, PHY-09)
   const physics = new MatterPhysicsAdapter();
 

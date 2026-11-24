@@ -1,5 +1,6 @@
-import React from 'react';
-import { PenSpec } from '../game/types';
+import React, { useId } from 'react';
+import { PenSpec, PenUpgradePart } from '../game/types';
+import { PEN_DETAILS } from '../game/render/penDetails';
 
 export const GameLogo: React.FC = () => {
   return (
@@ -81,18 +82,44 @@ export const GameLogo: React.FC = () => {
   );
 };
 
-export const PenPreviewSvg: React.FC<{ pen: PenSpec; className?: string }> = ({
+export const PenPreviewSvg: React.FC<{
+  pen: PenSpec;
+  className?: string;
+  focusedPart?: PenUpgradePart;
+  installLevel?: number;
+}> = ({
   pen,
   className = 'w-full h-9',
+  focusedPart,
+  installLevel,
 }) => {
+  const gradient = useId();
   const halfL = pen.length * 0.5;
   const r = pen.radius;
+  const nib = `${halfL - 22},${-r * 0.85} ${halfL + 4},0 ${halfL - 22},${r * 0.85}`;
+  const gripSelected = focusedPart === 'grip';
+  const nibSelected = focusedPart === 'nib';
+  const detail = PEN_DETAILS[pen.style];
+  const tip = pen.style === 'highlighter' ? `${halfL - 21},${-r * 0.65} ${halfL + 2},${-r * 0.3} ${halfL + 2},${r * 0.48} ${halfL - 21},${r * 0.7}`
+    : pen.style === 'marker' ? `${halfL - 21},${-r * 0.57} ${halfL - 3},${-r * 0.44} ${halfL + 2},0 ${halfL - 3},${r * 0.44} ${halfL - 21},${r * 0.57}` : nib;
   return (
     <svg
-      viewBox={`-82 -22 164 44`}
+      viewBox={focusedPart ? '-106 -28 212 56' : '-82 -22 164 44'}
       className={className}
       aria-hidden="true"
     >
+      <defs>
+        <linearGradient id={`${gradient}-barrel`} x1="0" x2="0" y1="0" y2="1">
+          <stop stopColor={pen.secondaryColor} />
+          <stop offset=".45" stopColor={pen.primaryColor} />
+          <stop offset="1" stopColor="#0c1521" />
+        </linearGradient>
+        <linearGradient id={`${gradient}-metal`} x1="0" x2="0" y1="0" y2="1">
+          <stop stopColor={pen.clipColor} />
+          <stop offset=".53" stopColor={pen.nibColor} />
+          <stop offset="1" stopColor="#536478" />
+        </linearGradient>
+      </defs>
       {/* Subtle drop shadow */}
       <rect
         x={-halfL + 2}
@@ -103,10 +130,7 @@ export const PenPreviewSvg: React.FC<{ pen: PenSpec; className?: string }> = ({
         fill="rgba(0,0,0,0.35)"
       />
       {/* Nib */}
-      <polygon
-        points={`${halfL - 22},${-r * 0.85} ${halfL + 4},0 ${halfL - 22},${r * 0.85}`}
-        fill={pen.nibColor}
-      />
+      {!nibSelected && <polygon points={tip} fill={`url(#${gradient}-metal)`} />}
       {/* Main Barrel */}
       <rect
         x={-halfL}
@@ -114,7 +138,7 @@ export const PenPreviewSvg: React.FC<{ pen: PenSpec; className?: string }> = ({
         width={pen.length - 18}
         height={r * 2}
         rx={pen.style === 'highlighter' ? 5 : r * 0.85}
-        fill={pen.primaryColor}
+        fill={`url(#${gradient}-barrel)`}
       />
       {/* Secondary Trim */}
       {pen.style === 'gel' || pen.style === 'fountain' ? (
@@ -160,6 +184,47 @@ export const PenPreviewSvg: React.FC<{ pen: PenSpec; className?: string }> = ({
         fill="#FFFFFF"
         fillOpacity="0.4"
       />
+      {pen.style === 'ballpoint' && <path d={`M ${-halfL + 18} 3 H ${halfL - 32}`} stroke="#091d36" strokeOpacity=".65" strokeWidth="2.5" />}
+      {pen.style === 'gel' && <g fill={pen.primaryColor}>
+        {[0, 4, 8, 12, 16].map(x => <rect key={x} x={halfL - 46 + x} y={-r + 2} width="2" height={2 * r - 4} rx="1" />)}
+      </g>}
+      {pen.style === 'highlighter' && <path d={`M ${halfL - 32} ${-r} v ${2 * r}`} stroke="#293a16" strokeWidth="7" />}
+      {pen.style === 'marker' && <path d={`M ${halfL - 43} -5 h 16 m -16 10 h 16`} stroke={pen.secondaryColor} strokeWidth="2" />}
+      {pen.style === 'spinner' && <g stroke={pen.accentColor} strokeWidth="1.5" fill="none">
+        <path d={`M ${halfL - 50} -5 l 5 5 -5 5 m 6 -10 l 5 5 -5 5`} />
+      </g>}
+      {pen.style === 'fountain' && <g fill={pen.accentColor} stroke={pen.clipColor} strokeWidth="1">
+        <path d={`M ${halfL - 40} -5 l 5 5 -5 5 -5 -5 z M ${halfL - 26} ${-r} v ${2 * r}`} />
+        <path d={`M ${halfL - 14} 0 H ${halfL}`} fill="none" />
+      </g>}
+      <text x={-18} y="2.3" textAnchor="middle" fontFamily="system-ui,sans-serif" fontWeight="800"
+        fontSize={pen.style === 'marker' ? 6.2 : 5.8} letterSpacing=".65" fill={detail.ink}>{detail.mark}</text>
+      {gripSelected && (
+        <g key={`grip-${installLevel ?? 'preview'}`}
+          className={installLevel !== undefined ? 'garage-install-grip' : undefined}>
+          <rect x={halfL - 55} y={-r - 3} width={32} height={2 * r + 6} rx="5"
+            fill="#22D3EE" fillOpacity="0.22" stroke="#67E8F9" strokeWidth="1.45" />
+          {[49, 42, 35, 28].map((x) => (
+            <path key={x} d={`M ${halfL - x} ${-r + 3} v ${2 * r - 6}`}
+              stroke="#A5F3FC" strokeOpacity="0.65" strokeWidth="1" />
+          ))}
+        </g>
+      )}
+      {nibSelected && (
+        <g key={`nib-${installLevel ?? 'preview'}`}
+          className={installLevel !== undefined ? 'garage-install-nib' : undefined}>
+          <polygon points={tip} fill={pen.nibColor} />
+          <polygon points={`${halfL - 23},${-r} ${halfL + 7},0 ${halfL - 23},${r}`}
+            fill="#FBBF24" fillOpacity="0.26" stroke="#FDE68A" strokeWidth="1.45" />
+        </g>
+      )}
+      {focusedPart && installLevel !== undefined && (
+        <g key={`lock-${focusedPart}-${installLevel}`}
+          transform={`translate(${halfL - (gripSelected ? 37 : 18)} 0)`}>
+          <circle className="garage-install-lock" r={r + 3} fill="none"
+            stroke={gripSelected ? '#A5F3FC' : '#FDE68A'} strokeWidth="1.5" />
+        </g>
+      )}
     </svg>
   );
 };
