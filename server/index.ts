@@ -13,6 +13,7 @@ const app = express();
 app.disable('x-powered-by');
 const SESSION_IDLE_MS = 45_000;
 const RESULT_RETENTION_MS = 90_000;
+const PRACTICE_WAIT_MS = 12_000;
 const MAX_SESSIONS = 200;
 const competition = loadCompetition();
 const allowedOrigins = new Set(
@@ -32,7 +33,7 @@ const sessions = new Map<string, Session>();
 const queue = new Set<Session>();
 const rankedQueue = new Set<Session>();
 const authenticatedMatches = new WeakMap<OnlineMatch,
-  { id: string; p1: string; p2: string } | { id: string; p1: string; rival: number }>();
+  { id: string; p1: string; p2: string; practice: boolean } | { id: string; p1: string; rival: number }>();
 const recordedMatches = new WeakMap<OnlineMatch, Promise<unknown>>();
 const rankedPlayers = new WeakMap<OnlineMatch, Record<OnlineSide, NonNullable<Session['ranked']>>>();
 
@@ -58,23 +59,45 @@ async function pairRanked(now: number) {
       best = second;
       bestGap = gap;
     }
-    if (!best || !rankedQueue.has(first) || !rankedQueue.has(best)) continue;
-    rankedQueue.delete(first);
-    rankedQueue.delete(best);
-    const match = new OnlineMatch(now);
-    match.startAfterIntro(Date.now());
-    first.side = 'p1';
-    best.side = 'p2';
-    first.match = best.match = match;
-    rankedPlayers.set(match, { p1: search, p2: best.ranked! });
-    authenticatedMatches.set(match, { id: randomUUID(), p1: first.accountId!, p2: best.accountId! });
+    if (best) pairRankedSessions(first, best, false);
   }
+
+  // Once rated pairings are exhausted, let remaining players duel without rating changes.
+  const waiting = [...rankedQueue].filter(player => now - player.ranked!.queuedAt >= PRACTICE_WAIT_MS);
+  for (const first of waiting) {
+    if (!rankedQueue.has(first)) continue;
+    let best: Session | undefined;
+    let bestGap = Infinity;
+    for (const second of waiting) {
+      if (first.accountId === second.accountId || !rankedQueue.has(second)) continue;
+      const gap = Math.abs(first.ranked!.rating - second.ranked!.rating);
+      if (gap >= bestGap) continue;
+      best = second;
+      bestGap = gap;
+    }
+    if (best) pairRankedSessions(first, best, true);
+  }
+}
+
+function pairRankedSessions(first: Session, second: Session, practice: boolean) {
+  if (!rankedQueue.has(first) || !rankedQueue.has(second)) return;
+  rankedQueue.delete(first);
+  rankedQueue.delete(second);
+  const now = Date.now();
+  const match = new OnlineMatch(now);
+  match.startAfterIntro(now);
+  first.side = 'p1';
+  second.side = 'p2';
+  first.match = second.match = match;
+  rankedPlayers.set(match, { p1: first.ranked!, p2: second.ranked! });
+  authenticatedMatches.set(match, { id: randomUUID(), p1: first.accountId!, p2: second.accountId!, practice });
 }
 
 function recordResult(match: OnlineMatch, now: number): Promise<unknown> | undefined {
   const meta = authenticatedMatches.get(match);
   const winner = match.state.winner;
   if (!competition || !meta || !winner) return;
+  if ('practice' in meta && meta.practice) return;
   const recorded = recordedMatches.get(match);
   if (recorded) return recorded;
   const completed = match.state.score[winner] === 2;
@@ -274,11 +297,13 @@ async function sendMatchState(session: Session, match: OnlineMatch, side: Online
   const meta = authenticatedMatches.get(match);
   const players = rankedPlayers.get(match);
   // Deliver the final shot before waiting for the rating receipt from storage.
-  const resultReady = state.winner && !includeReplay;
+  const practice = !!(meta && 'practice' in meta && meta.practice);
+  const resultReady = state.winner && !includeReplay && !practice;
   if (resultReady) await recordResult(match, now);
   const ranked = meta && players && session.accountId ? {
     id: meta.id,
     startsAt: match.startsAt,
+    practice: practice || undefined,
     players: {
       p1: { displayName: players.p1.displayName, rating: players.p1.rating, penId: players.p1.penId },
       p2: { displayName: players.p2.displayName, rating: players.p2.rating, penId: players.p2.penId },
@@ -334,7 +359,8 @@ app.delete('/api/online/session', route(async (req, res) => {
   const session = getSession(req.get('Authorization'));
   if (session) await closeSession(session, Date.now());
   const meta = session?.match && authenticatedMatches.get(session.match);
-  const result = meta && session?.ranked && session.accountId && await competition?.store.rankedResult(meta.id, session.accountId);
+  const result = meta && 'practice' in meta && !meta.practice && session?.accountId
+    && await competition?.store.rankedResult(meta.id, session.accountId);
   if (result) { res.json({ result }); return; }
   res.sendStatus(204);
 }));

@@ -41,6 +41,7 @@ export type OnlineStatus =
       ranked?: {
         id: string;
         startsAt: number;
+        practice?: boolean;
         players: Record<OnlineSide, { displayName: string; rating: number; penId?: string }>;
         result?: RankedHistoryEntry;
       };
